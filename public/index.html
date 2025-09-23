@@ -24,32 +24,42 @@
 
   <div id="app" class="hidden">
     <header>
-      <h2 id="welcome"></h2>
-      <div id="stats">
-        Рейтинг: <span id="rating">-</span> | Монеты: <span id="coins">-</span>
+      <div class="header-text">
+        <h2 id="welcome"></h2>
+        <p class="tagline">Соберите команду, выбирайте скин и покоряйте шахматные вершины!</p>
       </div>
-      <div id="skinSelect">
-        <label for="skin">Скин фигур:</label>
-        <select id="skin"></select>
+      <div class="status-bar panel">
+        <div id="stats">
+          <span class="badge rating">Рейтинг: <strong id="rating">-</strong></span>
+          <span class="badge coins">Монеты: <strong id="coins">-</strong></span>
+        </div>
+        <div id="skinSelect">
+          <label for="skin">Скин фигур:</label>
+          <select id="skin"></select>
+        </div>
       </div>
     </header>
     <main>
       <section id="quests" class="panel">
         <h3>Ежедневные задания</h3>
+        <p class="hint">Выполняйте задания, чтобы зарабатывать монеты и украшения!</p>
         <ul id="questList"></ul>
       </section>
       <section id="gameArea" class="panel">
-        <div id="board" style="width: 400px"></div>
+        <div id="board" class="board-shell"></div>
         <div id="controls">
-          <button id="findMatch">Сыграть с игроком</button>
-          <select id="aiLevel">
-            <option value="">— Игра с ИИ —</option>
-            <option value="1">Уровень 1</option>
-            <option value="2">Уровень 2</option>
-            <option value="3">Уровень 3</option>
-            <option value="4">Уровень 4</option>
-            <option value="5">Уровень 5</option>
-          </select>
+          <button id="findMatch" class="action">Сыграть с игроком</button>
+          <div class="ai-controls">
+            <select id="aiLevel">
+              <option value="">Уровень ИИ</option>
+              <option value="1">Уровень 1</option>
+              <option value="2">Уровень 2</option>
+              <option value="3">Уровень 3</option>
+              <option value="4">Уровень 4</option>
+              <option value="5">Уровень 5</option>
+            </select>
+            <button id="playAI" class="action secondary">Игра с ИИ</button>
+          </div>
         </div>
       </section>
       <section id="chatArea" class="panel hidden">

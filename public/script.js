@@ -19,6 +19,7 @@
   const questList = document.getElementById('questList');
   const findMatchBtn = document.getElementById('findMatch');
   const aiLevelSelect = document.getElementById('aiLevel');
+  const playAIBtn = document.getElementById('playAI');
   const chatArea = document.getElementById('chatArea');
   const messagesEl = document.getElementById('messages');
   const chatForm = document.getElementById('chatForm');
@@ -29,6 +30,15 @@
   let playerColor = null;
   let board = null;
   let game = null;
+
+  playAIBtn.disabled = true;
+  aiLevelSelect.disabled = true;
+
+  window.addEventListener('resize', () => {
+    if (board && typeof board.resize === 'function') {
+      board.resize();
+    }
+  });
 
   // Helper: load user info
   async function loadUser() {
@@ -94,6 +104,8 @@
       await loadSkins();
       await loadUser();
       await loadQuests();
+      playAIBtn.disabled = false;
+      aiLevelSelect.disabled = false;
     } catch (err) {
       alert(err.message);
     }
@@ -119,12 +131,17 @@
   });
 
   // Handle AI level selection
-  aiLevelSelect.addEventListener('change', () => {
-    const level = parseInt(aiLevelSelect.value, 10);
-    if (level && currentUser) {
-      aiLevelSelect.disabled = true;
-      socket.emit('startAI', { username: currentUser, level });
+  playAIBtn.addEventListener('click', () => {
+    if (!currentUser) {
+      return alert('Сначала войдите в игру!');
     }
+    const level = parseInt(aiLevelSelect.value, 10);
+    if (!level) {
+      return alert('Выберите уровень сложности ИИ.');
+    }
+    playAIBtn.disabled = true;
+    aiLevelSelect.disabled = true;
+    socket.emit('startAI', { username: currentUser, level });
   });
 
   // Chat form submission
@@ -144,13 +161,15 @@
       position: 'start',
       orientation: color,
       draggable: true,
-      onDrop: handleDrop
+      onDrop: handleDrop,
+      responsive: true
     });
     chatArea.classList.remove('hidden');
     findMatchBtn.disabled = false;
     findMatchBtn.textContent = 'Сыграть с игроком';
     aiLevelSelect.disabled = false;
     aiLevelSelect.value = '';
+    playAIBtn.disabled = false;
     alert(`Найден соперник: ${opponent}! Вы играете за ${color === 'white' ? 'белых' : 'чёрных'}`);
   });
 
@@ -163,13 +182,15 @@
       position: 'start',
       orientation: color,
       draggable: true,
-      onDrop: handleDrop
+      onDrop: handleDrop,
+      responsive: true
     });
     chatArea.classList.add('hidden');
     findMatchBtn.disabled = false;
     findMatchBtn.textContent = 'Сыграть с игроком';
     aiLevelSelect.disabled = false;
     aiLevelSelect.value = '';
+    playAIBtn.disabled = false;
     alert(`Игра с компьютером началась! Вы играете за белых.`);
   });
 
@@ -203,6 +224,9 @@
     chatArea.classList.add('hidden');
     await loadUser();
     await loadQuests();
+    playAIBtn.disabled = false;
+    aiLevelSelect.disabled = false;
+    aiLevelSelect.value = '';
   });
 
   // Socket event: chat message
