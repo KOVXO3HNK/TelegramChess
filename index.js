@@ -1,105 +1,129 @@
-// index.js — Основной серверный файл
-
-// Импорт необходимых модулей
 const express = require('express');
 const axios = require('axios');
 const http = require('http');
-require('dotenv').config();  // если используем .env для переменных
+require('dotenv').config();
 
-// Инициализация Express-приложения
+const { registerUser } = require('./db');
+
+const TELEGRAM_API_BASE = process.env.BOT_TOKEN
+  ? `https://api.telegram.org/bot${process.env.BOT_TOKEN}`
+  : null;
+const WEBAPP_URL = process.env.WEBAPP_URL || '';
+
+if (!TELEGRAM_API_BASE) {
+  console.warn('⚠️  BOT_TOKEN is not set. Telegram API calls will fail.');
+}
+
 const app = express();
-app.use(express.json());  // для парсинга JSON в webhook-запросах
+app.use(express.json());
 
-// Маршрут для проверки работоспособности (например, GET "/")
-app.get('/', (req, res) => {
-    res.send('Chess bot server is running');
+app.get('/', (_req, res) => {
+  res.send('Chess bot server is running');
 });
 
-// Telegram Webhook endpoint (например, "/webhook" для POST-запросов от Telegram)
 app.post('/webhook', async (req, res) => {
-    const update = req.body;
+  const update = req.body;
+  console.log('Telegram update:', JSON.stringify(update));
 
-    // Логирование входящего апдейта (для отладки)
-    console.log('Telegram update:', JSON.stringify(update));
-
-    // Проверка типа апдейта – сообщение от пользователя
+  try {
     if (update.message) {
-        const chatId = update.message.chat.id;
-        const text = update.message.text;
-
-        if (text === '/start') {
-            // 1. Регистрация пользователя в базе (если еще не зарегистрирован)
-            //    Вызвать функцию из db.js, например db.getOrCreateUser(telegramId, имя)
-
-            // 2. Отправка приветственного сообщения и кнопки Web App
-            // Формируем текст приветствия
-            const welcomeText = 'Добро пожаловать в ChessBot! Используйте кнопку ниже, чтобы играть в шахматы.';
-            // Опционально: сформировать клавиатуру с кнопкой запуска веб-приложения
-            const replyMarkup = {
-                one_time_keyboard: true,
-                keyboard: [
-                    [{ text: 'Играть 🎮', web_app: { url: process.env.WEBAPP_URL + `?user=${chatId}` } }]
-                ]
-            };
-            try {
-                await axios.post(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
-                    chat_id: chatId,
-                    text: welcomeText,
-                    reply_markup: replyMarkup
-                });
-            } catch (err) {
-                console.error('Failed to send welcome message:', err);
-            }
-        }
-
-        // Можно обрабатывать другие команды, например, /help, /profile, /buy и т.д.
+      if (update.message.successful_payment) {
+        await handleSuccessfulPayment(update.message);
+      } else {
+        await handleIncomingMessage(update.message);
+      }
+    } else if (update.pre_checkout_query) {
+      await handlePreCheckoutQuery(update.pre_checkout_query);
     }
-    else if (update.pre_checkout_query) {
-        // Обработка предварительного чекаута (если используются платежи)
-        // Здесь надо подтвердить платеж, ответив Telegram, что можно списывать деньги.
-        const queryId = update.pre_checkout_query.id;
-        try {
-            await axios.post(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/answerPreCheckoutQuery`, {
-                pre_checkout_query_id: queryId,
-                ok: true
-            });
-        } catch (err) {
-            console.error('Failed to answer pre-checkout:', err);
-        }
-    }
-    else if (update.message && update.message.successful_payment) {
-        // Обработка успешного платежа
-        const payment = update.message.successful_payment;
-        const chatId = update.message.chat.id;
-        console.log('Payment successful:', payment);
-        // Например: начислить пользователю внутриигровую валюту согласно оплаченной сумме.
-        // db.addCurrency(chatId, amount);
-        // Уведомить пользователя:
-        try {
-            await axios.post(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
-                chat_id: chatId,
-                text: 'Оплата получена! Монеты зачислены на ваш счет.'
-            });
-        } catch (err) {
-            console.error('Failed to send payment confirmation:', err);
-        }
-    }
+  } catch (error) {
+    console.error('Failed to process Telegram update:', error);
+  }
 
-    // Ответ Telegram боту (HTTP 200 OK)
-    res.sendStatus(200);
+  res.sendStatus(200);
 });
 
-// Подключение модулей игры, БД, real-time:
-// Инициализация базы данных (например, supabase или pg)
-const db = require('./db');
+async function handleIncomingMessage(message) {
+  const chatId = message.chat.id;
+  const text = (message.text || '').trim();
 
-// Инициализация HTTP-сервера и Socket.IO
+  if (text === '/start') {
+    await registerUser(String(message.from.id), {
+      username: message.from.username || null,
+      firstName: message.from.first_name || null,
+      lastName: message.from.last_name || null,
+    });
+
+    const keyboardButton = WEBAPP_URL
+      ? {
+          text: 'Играть 🎮',
+          web_app: {
+            url: `${WEBAPP_URL}?user=${chatId}`,
+          },
+        }
+      : { text: 'Играть 🎮' };
+
+    const replyMarkup = {
+      keyboard: [[keyboardButton]],
+      resize_keyboard: true,
+      one_time_keyboard: false,
+    };
+
+    await sendTelegramMessage({
+      chat_id: chatId,
+      text:
+        'Добро пожаловать в ChessBot! Используйте кнопку ниже, чтобы играть в шахматы.',
+      reply_markup: replyMarkup,
+    });
+  }
+}
+
+async function handlePreCheckoutQuery(query) {
+  if (!TELEGRAM_API_BASE) return;
+
+  try {
+    await axios.post(`${TELEGRAM_API_BASE}/answerPreCheckoutQuery`, {
+      pre_checkout_query_id: query.id,
+      ok: true,
+    });
+  } catch (error) {
+    console.error('Failed to answer pre-checkout query:', error.response?.data || error);
+  }
+}
+
+async function handleSuccessfulPayment(message) {
+  const chatId = message.chat.id;
+  const payment = message.successful_payment;
+  console.log('Payment successful:', payment);
+
+  await sendTelegramMessage({
+    chat_id: chatId,
+    text: 'Оплата получена! Монеты зачислены на ваш счет.',
+  });
+}
+
+async function sendTelegramMessage(payload) {
+  if (!TELEGRAM_API_BASE) {
+    console.warn('Cannot send Telegram message because BOT_TOKEN is missing.');
+    return;
+  }
+
+  try {
+    await axios.post(`${TELEGRAM_API_BASE}/sendMessage`, payload);
+  } catch (error) {
+    console.error('Failed to send Telegram message:', error.response?.data || error);
+  }
+}
+
 const server = http.createServer(app);
-const io = require('socket.io')(server, { cors: { origin: '*' } });  // origin '*' для отладки, потом указать домен
-require('./socket')(io);  // Передаем объект Socket.IO в модуль socket.js для обработки событий
+const io = require('socket.io')(server, {
+  cors: {
+    origin: process.env.CORS_ORIGIN || '*',
+  },
+});
 
-// Запуск сервера на порту (PORT из окружения или 3000)
+require('./socket')(io);
+
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+  console.log(`Server is running on port ${PORT}`);
 });
