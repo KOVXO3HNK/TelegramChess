@@ -1,45 +1,51 @@
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const { Chess } = require('chess.js');
-const { Low, JSONFile } = require('lowdb');
-const { nanoid } = require('nanoid');
-const path = require('path');
+import express from 'express';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
+import { Chess } from 'chess.js';
+import { JSONFilePreset } from 'lowdb/node';
+import { nanoid } from 'nanoid';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 /*
  * Telegram Chess Web Application
  *
  * This server exposes a REST API for user management (registration, skins, quests,
- * leaderboard) and uses Socket.io to handle real‑time game play for both
- * player vs player and player vs AI. An in‑memory game table holds active
+ * leaderboard) and uses Socket.io to handle real-time game play for both
+ * player vs player and player vs AI. An in-memory game table holds active
  * games, while persistent user data and quests are stored in a tiny JSON
  * database powered by lowdb. Five difficulty levels of AI are implemented
  * through a simple minimax search with material evaluation.
  */
 
+// -------- Environment helpers --------
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 // -------- Database setup --------
 const dbFile = path.join(__dirname, 'db.json');
-const adapter = new JSONFile(dbFile);
-const db = new Low(adapter);
+const defaultData = { users: {}, quests: {} };
+const db = await JSONFilePreset(dbFile, defaultData);
 
-async function initDb() {
-  await db.read();
-  db.data = db.data || { users: {}, games: {}, quests: {} };
-  // Ensure all users have required fields if db was empty
+let initialised = false;
+if (!db.data.users) {
+  db.data.users = {};
+  initialised = true;
+}
+if (!db.data.quests) {
+  db.data.quests = {};
+  initialised = true;
+}
+if (initialised) {
   await db.write();
 }
-
-// Initialise DB immediately
-initDb().catch((err) => {
-  console.error('Failed to initialise database', err);
-});
 
 // -------- Express setup --------
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-const server = http.createServer(app);
+const server = createServer(app);
 const io = new Server(server);
 
 // -------- Application Constants --------
@@ -63,7 +69,7 @@ const QUEST_DEFINITIONS = [
   { id: 'checkmate', description: 'Поставить мат', target: 1, reward: 30 }
 ];
 
-// In‑memory table of active games. Persisting active games is not required
+// In-memory table of active games. Persisting active games is not required
 // because they only live while sockets are connected.
 const activeGames = {};
 
@@ -75,8 +81,12 @@ const waitingPlayers = [];
  * Quests reset daily; progress and completion flags reset at midnight.
  */
 async function generateDailyQuests(username) {
+  if (!db.data.users[username]) {
+    return null;
+  }
   const today = new Date().toISOString().split('T')[0];
-  if (!db.data.quests[username] || db.data.quests[username].date !== today) {
+  const existing = db.data.quests[username];
+  if (!existing || existing.date !== today) {
     const quests = QUEST_DEFINITIONS.map((q) => ({
       id: q.id,
       description: q.description,
@@ -96,15 +106,16 @@ async function generateDailyQuests(username) {
  * quest reaches its target, mark as complete and award coins.
  */
 async function incrementQuest(username, questId, amount = 1) {
+  const user = db.data.users[username];
+  if (!user) return;
   const questsObj = await generateDailyQuests(username);
+  if (!questsObj) return;
   const quest = questsObj.quests.find((q) => q.id === questId);
   if (!quest || quest.completed) return;
   quest.progress += amount;
   if (quest.progress >= quest.target) {
     quest.progress = quest.target;
     quest.completed = true;
-    // Award coins
-    const user = db.data.users[username];
     user.coins += quest.reward;
   }
   await db.write();
@@ -130,8 +141,8 @@ const PIECE_VALUES = { p: 1, n: 3, b: 3.25, r: 5, q: 9, k: 0 };
 function evaluateBoard(game) {
   let evaluation = 0;
   const board = game.board();
-  for (let row of board) {
-    for (let piece of row) {
+  for (const row of board) {
+    for (const piece of row) {
       if (!piece) continue;
       const value = PIECE_VALUES[piece.type] || 0;
       evaluation += piece.color === 'w' ? value : -value;
@@ -140,13 +151,12 @@ function evaluateBoard(game) {
   return evaluation;
 }
 
-function minimax(game, depth, isMaximizing) {
+function minimax(game, depth, isMaximising) {
   if (depth === 0 || game.game_over()) {
-    const evalValue = evaluateBoard(game);
-    return evalValue;
+    return evaluateBoard(game);
   }
   const moves = game.moves();
-  if (isMaximizing) {
+  if (isMaximising) {
     let maxEval = -Infinity;
     for (const move of moves) {
       const cloned = new Chess(game.fen());
@@ -155,16 +165,15 @@ function minimax(game, depth, isMaximizing) {
       if (evalValue > maxEval) maxEval = evalValue;
     }
     return maxEval;
-  } else {
-    let minEval = Infinity;
-    for (const move of moves) {
-      const cloned = new Chess(game.fen());
-      cloned.move(move);
-      const evalValue = minimax(cloned, depth - 1, true);
-      if (evalValue < minEval) minEval = evalValue;
-    }
-    return minEval;
   }
+  let minEval = Infinity;
+  for (const move of moves) {
+    const cloned = new Chess(game.fen());
+    cloned.move(move);
+    const evalValue = minimax(cloned, depth - 1, true);
+    if (evalValue < minEval) minEval = evalValue;
+  }
+  return minEval;
 }
 
 function getBestMove(game, depth) {
@@ -203,6 +212,7 @@ app.post('/api/register', async (req, res) => {
     };
     await db.write();
   }
+  await generateDailyQuests(uname);
   res.json(db.data.users[uname]);
 });
 
@@ -226,7 +236,7 @@ app.post('/api/select_skin', async (req, res) => {
   if (typeof skin !== 'number' || skin < 0 || skin >= SKINS.length) {
     return res.status(400).json({ error: 'Некорректный скин' });
   }
-  const uname = username.toLowerCase();
+  const uname = username?.toLowerCase();
   const user = db.data.users[uname];
   if (!user) return res.status(404).json({ error: 'Пользователь не найден' });
   user.skin = skin;
@@ -243,7 +253,7 @@ app.get('/api/quests/:username', async (req, res) => {
 });
 
 // Leaderboard: return top 10 users sorted by rating
-app.get('/api/leaderboard', async (req, res) => {
+app.get('/api/leaderboard', (req, res) => {
   const usersArray = Object.values(db.data.users);
   usersArray.sort((a, b) => b.rating - a.rating);
   res.json(usersArray.slice(0, 10));
@@ -258,8 +268,7 @@ io.on('connection', (socket) => {
   socket.on('findMatch', async ({ username }) => {
     currentUser = username.toLowerCase();
     // Add to queue if not already waiting
-    const existing = waitingPlayers.find((u) => u.username === currentUser);
-    if (existing) return;
+    if (waitingPlayers.some((u) => u.username === currentUser)) return;
     waitingPlayers.push({ socket, username: currentUser });
     // Check if match available
     if (waitingPlayers.length >= 2) {
@@ -323,21 +332,23 @@ io.on('connection', (socket) => {
       if (!game.vsAI) {
         const userA = db.data.users[winner];
         const userB = db.data.users[loser];
-        const [newA, newB] = updateRatings(userA.rating, userB.rating, 1);
-        userA.rating = newA;
-        userB.rating = newB;
-        userA.coins += 10;
-        await incrementQuest(winner, 'win');
-        await incrementQuest(winner, 'checkmate');
-        await db.write();
+        if (userA && userB) {
+          const [newA, newB] = updateRatings(userA.rating, userB.rating, 1);
+          userA.rating = newA;
+          userB.rating = newB;
+          userA.coins += 10;
+          await incrementQuest(winner, 'win');
+          await incrementQuest(winner, 'checkmate');
+          await db.write();
+        }
       } else {
         const user = db.data.users[game.white];
-        if (winner === game.white) {
+        if (winner === game.white && user) {
           user.coins += 10;
           user.rating += 5;
           await incrementQuest(game.white, 'win');
           await incrementQuest(game.white, 'checkmate');
-        } else {
+        } else if (user) {
           user.rating = Math.max(100, user.rating - 5);
         }
         await db.write();
@@ -351,17 +362,21 @@ io.on('connection', (socket) => {
       if (!game.vsAI) {
         const userA = db.data.users[game.white];
         const userB = db.data.users[game.black];
-        const [newA, newB] = updateRatings(userA.rating, userB.rating, 0.5);
-        userA.rating = newA;
-        userB.rating = newB;
-        userA.coins += 5;
-        userB.coins += 5;
-        await db.write();
+        if (userA && userB) {
+          const [newA, newB] = updateRatings(userA.rating, userB.rating, 0.5);
+          userA.rating = newA;
+          userB.rating = newB;
+          userA.coins += 5;
+          userB.coins += 5;
+          await db.write();
+        }
       } else {
         // vs AI draw: adjust rating slightly
         const user = db.data.users[game.white];
-        user.coins += 5;
-        await db.write();
+        if (user) {
+          user.coins += 5;
+          await db.write();
+        }
       }
       io.to(gameId).emit('gameOver', { winner: null, reason: 'draw' });
       delete activeGames[gameId];
@@ -379,15 +394,19 @@ io.on('connection', (socket) => {
           const winner = 'ai';
           const loser = game.white;
           const user = db.data.users[game.white];
-          // Player lost
-          user.rating = Math.max(100, user.rating - 5);
-          await db.write();
+          if (user) {
+            // Player lost
+            user.rating = Math.max(100, user.rating - 5);
+            await db.write();
+          }
           io.to(gameId).emit('gameOver', { winner, loser, reason: 'checkmate' });
           delete activeGames[gameId];
         } else if (chess.in_draw() || chess.in_stalemate() || chess.in_threefold_repetition() || chess.insufficient_material()) {
           const user = db.data.users[game.white];
-          user.coins += 5;
-          await db.write();
+          if (user) {
+            user.coins += 5;
+            await db.write();
+          }
           io.to(gameId).emit('gameOver', { winner: null, reason: 'draw' });
           delete activeGames[gameId];
         }
@@ -405,25 +424,29 @@ io.on('connection', (socket) => {
     const game = activeGames[gameId];
     if (!game) return;
     const loser = username.toLowerCase();
-    const winner = (loser === game.white ? game.black : game.white);
+    const winner = loser === game.white ? game.black : game.white;
     if (!game.vsAI) {
       const userA = db.data.users[winner];
       const userB = db.data.users[loser];
-      const [newA, newB] = updateRatings(userA.rating, userB.rating, 1);
-      userA.rating = newA;
-      userB.rating = newB;
-      userA.coins += 10;
-      await incrementQuest(winner, 'win');
-      await db.write();
+      if (userA && userB) {
+        const [newA, newB] = updateRatings(userA.rating, userB.rating, 1);
+        userA.rating = newA;
+        userB.rating = newB;
+        userA.coins += 10;
+        await incrementQuest(winner, 'win');
+        await db.write();
+      }
     } else {
       const user = db.data.users[game.white];
-      if (loser === game.white) {
-        user.rating = Math.max(100, user.rating - 5);
-      } else {
-        user.rating += 5;
-        await incrementQuest(game.white, 'win');
+      if (user) {
+        if (loser === game.white) {
+          user.rating = Math.max(100, user.rating - 5);
+        } else {
+          user.rating += 5;
+          await incrementQuest(game.white, 'win');
+        }
+        await db.write();
       }
-      await db.write();
     }
     io.to(gameId).emit('gameOver', { winner, loser, reason: 'resignation' });
     delete activeGames[gameId];
