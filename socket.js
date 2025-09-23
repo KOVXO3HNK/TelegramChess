@@ -6,6 +6,7 @@ const {
   getGameState,
   endGame,
 } = require('./game');
+const db = require('./db');
 
 module.exports = function initialiseSocket(io) {
   io.on('connection', (socket) => {
@@ -58,7 +59,7 @@ module.exports = function initialiseSocket(io) {
 
     socket.on(
       'game:move',
-      ({ gameId, playerId, from, to, promotion } = {}, callback = () => {}) => {
+      async ({ gameId, playerId, from, to, promotion } = {}, callback = () => {}) => {
         if (!gameId || !playerId || !from || !to) {
           callback({ success: false, error: 'gameId, playerId, from и to обязательны' });
           return;
@@ -74,6 +75,14 @@ module.exports = function initialiseSocket(io) {
         callback(result);
 
         if (result.gameOver) {
+          const state = getGameState(gameId);
+
+          try {
+            await handleGameOver(gameId, state, result);
+          } catch (error) {
+            console.error('Failed to persist game results:', error);
+          }
+
           endGame(gameId);
           io.to(gameId).emit('game:over', {
             gameId,
@@ -89,3 +98,75 @@ module.exports = function initialiseSocket(io) {
     });
   });
 };
+
+async function handleGameOver(gameId, state, result) {
+  if (!state || !state.players) {
+    return;
+  }
+
+  const { players } = state;
+  const whiteId = players.white;
+  const blackId = players.black;
+
+  if (!whiteId || !blackId) {
+    return;
+  }
+
+  const winnerId = result.winner?.playerId || null;
+  const pgn = result.pgn || null;
+
+  await Promise.all([
+    recordRatings(whiteId, blackId, winnerId),
+    awardCoins(whiteId, blackId, winnerId),
+    db.recordGameResult(gameId, whiteId, blackId, winnerId, pgn),
+  ]);
+}
+
+async function recordRatings(whiteId, blackId, winnerId) {
+  try {
+    const [whiteUser, blackUser] = await Promise.all([
+      db.getOrCreateUser(whiteId),
+      db.getOrCreateUser(blackId),
+    ]);
+
+    if (!whiteUser || !blackUser || !winnerId) {
+      return;
+    }
+
+    const delta = 10;
+    const whiteRating = whiteUser.rating ?? 1500;
+    const blackRating = blackUser.rating ?? 1500;
+
+    const updates = [];
+
+    if (winnerId === whiteId) {
+      updates.push(db.updateRating(whiteId, whiteRating + delta));
+      updates.push(db.updateRating(blackId, Math.max(0, blackRating - delta)));
+    } else if (winnerId === blackId) {
+      updates.push(db.updateRating(blackId, blackRating + delta));
+      updates.push(db.updateRating(whiteId, Math.max(0, whiteRating - delta)));
+    }
+
+    await Promise.all(updates);
+  } catch (error) {
+    console.error('Failed to update ratings:', error);
+  }
+}
+
+async function awardCoins(whiteId, blackId, winnerId) {
+  const participationReward = 1;
+  const winBonus = 5;
+
+  try {
+    await Promise.all([
+      db.updateCoins(whiteId, participationReward),
+      db.updateCoins(blackId, participationReward),
+    ]);
+
+    if (winnerId) {
+      await db.updateCoins(winnerId, winBonus);
+    }
+  } catch (error) {
+    console.error('Failed to update coins:', error);
+  }
+}

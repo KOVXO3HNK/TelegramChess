@@ -8,6 +8,7 @@
     "test": "echo \"No automated tests defined\""
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.57.4",
     "axios": "^1.7.4",
     "chess.js": "^1.0.0-beta.7",
     "dotenv": "^16.4.5",
