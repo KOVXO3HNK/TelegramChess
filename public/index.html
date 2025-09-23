@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Телеграм Шахматы</title>
+  <!-- External libraries -->
+  <link
+    rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/chessboard-js/1.0.0/chessboard-1.0.0.min.css"
+  />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/1.0.0/chess.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chessboard-js/1.0.0/chessboard-1.0.0.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="loginPanel" class="panel">
+    <h1>Телеграм Шахматы</h1>
+    <p>Введите свой Telegram ник с символом @, чтобы начать игру.</p>
+    <input type="text" id="usernameInput" placeholder="@username" />
+    <button id="loginBtn">Войти</button>
+  </div>
+
+  <div id="app" class="hidden">
+    <header>
+      <h2 id="welcome"></h2>
+      <div id="stats">
+        Рейтинг: <span id="rating">-</span> | Монеты: <span id="coins">-</span>
+      </div>
+      <div id="skinSelect">
+        <label for="skin">Скин фигур:</label>
+        <select id="skin"></select>
+      </div>
+    </header>
+    <main>
+      <section id="quests" class="panel">
+        <h3>Ежедневные задания</h3>
+        <ul id="questList"></ul>
+      </section>
+      <section id="gameArea" class="panel">
+        <div id="board" style="width: 400px"></div>
+        <div id="controls">
+          <button id="findMatch">Сыграть с игроком</button>
+          <select id="aiLevel">
+            <option value="">— Игра с ИИ —</option>
+            <option value="1">Уровень 1</option>
+            <option value="2">Уровень 2</option>
+            <option value="3">Уровень 3</option>
+            <option value="4">Уровень 4</option>
+            <option value="5">Уровень 5</option>
+          </select>
+        </div>
+      </section>
+      <section id="chatArea" class="panel hidden">
+        <h3>Чат</h3>
+        <ul id="messages" class="messages"></ul>
+        <form id="chatForm">
+          <input id="chatInput" autocomplete="off" placeholder="Сообщение..." />
+          <button>Отправить</button>
+        </form>
+      </section>
+    </main>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>

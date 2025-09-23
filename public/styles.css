@@ -1,0 +1,153 @@
+/*
+ * General styling for the Telegram Chess web application. The palette uses
+ * soft pastel tones and a playful font to create a light‑hearted, cartoon
+ * atmosphere. Each skin class modifies board colours and applies a CSS hue
+ * rotation filter to recolour piece images on the fly. A user’s selected
+ * skin is applied to the body element via a dynamic class.
+ */
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: 'Comic Sans MS', 'Trebuchet MS', sans-serif;
+  background-color: #fdf6e3;
+  color: #333;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100vh;
+}
+
+h1, h2, h3 {
+  margin: 0.5rem 0;
+}
+
+.panel {
+  background-color: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  padding: 1rem;
+  margin: 1rem 0;
+  width: 90%;
+  max-width: 600px;
+}
+
+.hidden {
+  display: none;
+}
+
+#loginPanel {
+  text-align: center;
+  margin-top: 5rem;
+}
+
+#usernameInput {
+  width: 60%;
+  padding: 0.5rem;
+  font-size: 1rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  margin-bottom: 1rem;
+}
+
+button {
+  cursor: pointer;
+  padding: 0.5rem 1rem;
+  font-size: 1rem;
+  border: none;
+  border-radius: 4px;
+  background-color: #8ecae6;
+  color: #fff;
+  transition: background-color 0.2s ease;
+}
+button:hover {
+  background-color: #219ebc;
+}
+
+#stats {
+  margin-bottom: 0.5rem;
+}
+
+#skinSelect {
+  margin-bottom: 1rem;
+}
+
+#gameArea {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+#controls {
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+#chatArea {
+  width: 90%;
+  max-width: 600px;
+}
+
+.messages {
+  list-style: none;
+  padding: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid #eee;
+  border-radius: 4px;
+  margin-bottom: 0.5rem;
+}
+
+.messages li {
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.messages li:last-child {
+  border-bottom: none;
+}
+
+#chatForm {
+  display: flex;
+}
+
+#chatInput {
+  flex: 1;
+  padding: 0.5rem;
+  border: 1px solid #ccc;
+  border-radius: 4px 0 0 4px;
+  font-size: 1rem;
+}
+
+#chatForm button {
+  border-radius: 0 4px 4px 0;
+}
+
+/*
+ * Board skins. Each skin class overrides the default chessboard.js
+ * colour scheme and applies a hue rotation filter to the piece images. The
+ * classes are applied to the body element via JavaScript when a user
+ * changes skins.
+ */
+.skin-0 .white-1e1d7e { background-color: #f0d9b5 !important; }
+.skin-0 .black-3c85d { background-color: #b58863 !important; }
+.skin-0 .chessboard .piece { filter: hue-rotate(0deg) saturate(1.2); }
+
+.skin-1 .white-1e1d7e { background-color: #f9dede !important; }
+.skin-1 .black-3c85d { background-color: #8ecae6 !important; }
+.skin-1 .chessboard .piece { filter: hue-rotate(45deg) saturate(1.5); }
+
+.skin-2 .white-1e1d7e { background-color: #e0ffe5 !important; }
+.skin-2 .black-3c85d { background-color: #c1cfff !important; }
+.skin-2 .chessboard .piece { filter: hue-rotate(90deg) saturate(1.4); }
+
+.skin-3 .white-1e1d7e { background-color: #ffe5c0 !important; }
+.skin-3 .black-3c85d { background-color: #80ded9 !important; }
+.skin-3 .chessboard .piece { filter: hue-rotate(180deg) saturate(1.4); }
+
+.skin-4 .white-1e1d7e { background-color: #f5f5f5 !important; }
+.skin-4 .black-3c85d { background-color: #c8b088 !important; }
+.skin-4 .chessboard .piece { filter: hue-rotate(240deg) saturate(1.3); }
