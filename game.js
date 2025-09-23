@@ -72,7 +72,7 @@ function makeMove(gameId, playerId, from, to, promotion = 'q') {
     // оставляем запись до вызова endGame, чтобы можно было получить итоговое состояние
   }
 
-  return {
+  const response = {
     success: true,
     move,
     fen: chess.fen(),
@@ -81,6 +81,12 @@ function makeMove(gameId, playerId, from, to, promotion = 'q') {
     turn: chess.turn(),
     check: chess.inCheck(),
   };
+
+  if (isGameOver) {
+    response.pgn = chess.pgn();
+  }
+
+  return response;
 }
 
 function getGameState(gameId) {
