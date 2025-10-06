@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Telegram Chess Mini‑App</title>
+    <!--
+      This mini‑app is designed to run inside the Telegram WebApp environment.
+      It provides a simple but visually pleasant chess experience with an
+      optional offline AI opponent. The layout is responsive and adapts
+      automatically to the available viewport. The JavaScript logic lives in
+      script.js and uses the chess.js library to manage game state. The AI is
+      implemented using a basic minimax algorithm with configurable search
+      depth controlled by the difficulty selector.
+    -->
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <!-- Hamburger menu button to toggle the game controls -->
+        <button id="menuToggle" class="menu-toggle" aria-label="Toggle menu">&#9776;</button>
+        <h1>Telegram Chess</h1>
+        <!-- Display usernames of the current player and opponent (AI or Player 2) -->
+        <div id="usernames" class="usernames">
+          <span id="playerName">Player</span>
+          <span class="versus">vs</span>
+          <span id="opponentName">Opponent</span>
+        </div>
+        <!-- Controls are wrapped in a container that can be toggled via the menu button -->
+        <div class="controls hidden">
+          <label for="modeSelect">Mode:</label>
+          <select id="modeSelect">
+            <option value="ai">Play vs AI</option>
+            <option value="two">Two Players</option>
+          </select>
+          <label for="difficultySelect" id="difficultyLabel">Difficulty:</label>
+          <select id="difficultySelect">
+            <option value="1">1 (Easy)</option>
+            <option value="2">2</option>
+            <option value="3" selected>3</option>
+            <option value="4">4</option>
+            <option value="5">5 (Hard)</option>
+          </select>
+          <button id="newGameBtn">New Game</button>
+        </div>
+      </header>
+      <main>
+        <div id="board" class="board"></div>
+      </main>
+      <footer id="status"></footer>
+    </div>
+
+    <!-- Telegram WebApp JS API -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- Predefine exports so that the UMD build of chess.js assigns Chess to exports.Chess -->
+    <script>
+      window.exports = {};
+    </script>
+    <!-- Removed external chess.js library.  Our embedded SimpleChess engine in script.js
+         handles all game logic and ensures the app works offline without network dependencies. -->
+    <!-- Main script.  Loaded normally (not as a module) to ensure it executes
+         correctly in file:// contexts. -->
+    <script src="script.js"></script>
+  </body>
+</html>
