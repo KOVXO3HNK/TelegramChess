@@ -42,14 +42,11 @@
             <option value="4">4</option>
             <option value="5">5 (Hard)</option>
           </select>
-          <!-- Opponent search input is shown only in two‑player mode.  When
-               hidden, it retains its state so that switching back to two
-               players restores the previous opponent selection. -->
-          <div id="opponentSearchContainer" class="opponent-search hidden">
-            <label for="opponentSearchInput" id="opponentLabel">Opponent:</label>
-            <input type="text" list="opponentList" id="opponentSearchInput" placeholder="Search players" />
-            <datalist id="opponentList"></datalist>
-          </div>
+          <!-- Button to initiate opponent matchmaking.  Visible only in
+               two‑player mode.  When clicked, the current player is
+               placed in a matchmaking queue and matched with another
+               waiting player based on rating. -->
+          <button id="findOpponentBtn" class="find-opponent hidden">Find Opponent</button>
           <button id="newGameBtn">New Game</button>
         </div>
       </header>

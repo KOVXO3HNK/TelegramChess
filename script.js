@@ -834,6 +834,10 @@ let scoreboard = {};
 let currentUserName = 'Player';
 let selectedOpponentName = null;
 let ratingUpdated = false;
+// Matchmaking queue.  Players who press the "Find Opponent" button in
+// two‑player mode are placed in this queue.  The queue is persisted
+// using localStorage so that players in different tabs can match.
+let matchQueue = [];
 
 // Load scoreboard from localStorage.  If no scoreboard exists, start
 // with an empty object.  Use try/catch to handle JSON parse errors.
@@ -868,6 +872,101 @@ function ensurePlayer(name) {
     scoreboard[name] = 1500;
   }
   return scoreboard[name];
+}
+
+// Load the matchmaking queue from localStorage.  Ensures matchQueue
+// is always an array.
+function loadQueue() {
+  try {
+    const data = localStorage.getItem('tgChessMatchQueue');
+    if (data) {
+      const parsed = JSON.parse(data);
+      if (Array.isArray(parsed)) {
+        matchQueue = parsed;
+      } else {
+        matchQueue = [];
+      }
+    } else {
+      matchQueue = [];
+    }
+  } catch (e) {
+    matchQueue = [];
+  }
+}
+
+// Save the matchmaking queue to localStorage.
+function saveQueue() {
+  try {
+    localStorage.setItem('tgChessMatchQueue', JSON.stringify(matchQueue));
+  } catch (e) {
+    // ignore
+  }
+}
+
+// Remove a player from the matchmaking queue.
+function removeFromQueue(name) {
+  matchQueue = matchQueue.filter(item => item && item.name !== name);
+}
+
+// Add a player to the matchmaking queue with their current rating.
+function addToQueue(name, rating) {
+  removeFromQueue(name);
+  matchQueue.push({ name, rating, time: Date.now() });
+}
+
+// Find the best opponent in the queue for the given player based on
+// minimal rating difference.  Returns the queue entry or null if no
+// candidate exists.
+function findBestOpponent(name, rating) {
+  let best = null;
+  let bestDiff = Infinity;
+  for (const item of matchQueue) {
+    if (!item || item.name === name) continue;
+    const diff = Math.abs((item.rating || 1500) - rating);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      best = item;
+    }
+  }
+  return best;
+}
+
+// Attempt to find an opponent for the current user.  If another
+// player is waiting in the queue, they are matched and a new game
+// begins.  Otherwise the current user is added to the queue and a
+// message is shown indicating that the search is ongoing.
+function findOpponent() {
+  // Always ensure the scoreboard and queue are up to date
+  ensurePlayer(currentUserName);
+  loadQueue();
+  // Remove the current user from the queue (if present) before
+  // searching so they don't match with themselves.
+  removeFromQueue(currentUserName);
+  const myRating = scoreboard[currentUserName] || 1500;
+  const candidate = findBestOpponent(currentUserName, myRating);
+  if (candidate) {
+    // Found a match.  Remove the opponent from the queue and save.
+    removeFromQueue(candidate.name);
+    saveQueue();
+    selectedOpponentName = candidate.name;
+    // Ensure the opponent exists in the scoreboard
+    ensurePlayer(selectedOpponentName);
+    // We are now in two‑player mode
+    isPlayerVsAI = false;
+    // Start a new game against this opponent
+    startNewGame();
+    // Notify players in the status area
+    statusEl.textContent = `Matched with ${selectedOpponentName} (${scoreboard[selectedOpponentName]})`;
+  } else {
+    // No opponent available.  Add current user to the queue and save.
+    addToQueue(currentUserName, myRating);
+    saveQueue();
+    // Show searching status
+    statusEl.textContent = 'Searching for opponent...';
+    // Hide the new game button while waiting to avoid confusion
+    const newGameBtn = document.getElementById('newGameBtn');
+    if (newGameBtn) newGameBtn.disabled = true;
+  }
 }
 
 // Update the opponent datalist options based on the current scoreboard.
@@ -979,9 +1078,8 @@ function updateUsernames() {
       opponentSpan.textContent = `${opponentName} (${scoreboard[opponentName]})`;
     }
   }
-  // Save scoreboard and update opponent list
+  // Save scoreboard
   saveScoreboard();
-  updateOpponentList();
 }
 
 // Initialize Telegram WebApp environment and register theme handlers
@@ -1197,14 +1295,23 @@ function startNewGame() {
   // Enable/disable difficulty selector based on mode
   document.getElementById('difficultySelect').disabled = !isPlayerVsAI;
   document.getElementById('difficultyLabel').style.opacity = isPlayerVsAI ? 1 : 0.5;
-  // Show or hide the opponent search field based on mode
-  const searchContainer = document.getElementById('opponentSearchContainer');
-  if (searchContainer) {
+  // Show or hide the "Find Opponent" button based on mode.  In AI mode
+  // the button remains hidden and disabled; in two‑player mode it is
+  // visible and enabled.  Also ensure the "New Game" button is
+  // re‑enabled when starting a new game.
+  const findBtn = document.getElementById('findOpponentBtn');
+  const newGameBtn = document.getElementById('newGameBtn');
+  if (findBtn) {
     if (isPlayerVsAI) {
-      searchContainer.classList.add('hidden');
+      findBtn.classList.add('hidden');
+      findBtn.disabled = true;
     } else {
-      searchContainer.classList.remove('hidden');
+      findBtn.classList.remove('hidden');
+      findBtn.disabled = false;
     }
+  }
+  if (newGameBtn) {
+    newGameBtn.disabled = false;
   }
   // Update displayed usernames when starting a new game.  This also
   // initializes scoreboard entries if needed.
@@ -1388,9 +1495,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (statusEl) {
         statusEl.textContent = 'Engine loaded';
       }
-      // Load persistent rating data and initialise the opponent list.
+      // Load persistent rating data.  This loads the scoreboard from
+      // localStorage and ensures ratings persist across sessions.
       loadScoreboard();
-      updateOpponentList();
       // Bind UI controls after the Chess class is available
       document.getElementById('newGameBtn').addEventListener('click', startNewGame);
       document.getElementById('modeSelect').addEventListener('change', () => {
@@ -1401,27 +1508,19 @@ document.addEventListener('DOMContentLoaded', () => {
         aiDepth = parseInt(document.getElementById('difficultySelect').value, 10) || 3;
       });
 
-      // Bind opponent search input events.  When the user picks a
-      // value from the datalist (change event), assign the opponent
-      // name, ensure they have a rating, update the UI and start a
-      // new two‑player game.  Only apply this when in two‑player
-      // mode.
-      const opponentInput = document.getElementById('opponentSearchInput');
-      if (opponentInput) {
-        opponentInput.addEventListener('change', () => {
-          const value = opponentInput.value.trim();
-          if (value) {
-            selectedOpponentName = value;
-            if (selectedOpponentName !== 'AI' && selectedOpponentName !== 'Player 2') {
-              ensurePlayer(selectedOpponentName);
-            }
-            // Start a new game if currently in two‑player mode.  This
-            // will update names and ratings.
-            if (!isPlayerVsAI) {
-              startNewGame();
-            } else {
-              updateUsernames();
-            }
+      // Bind the "Find Opponent" button.  When clicked in two‑player
+      // mode, the current player is added to a matchmaking queue and
+      // matched with another waiting player based on the smallest
+      // rating difference.  In AI mode this button is hidden and
+      // disabled.  The findOpponent() function handles adding the
+      // player to the queue and performing the match.
+      const findOpponentBtn = document.getElementById('findOpponentBtn');
+      if (findOpponentBtn) {
+        findOpponentBtn.addEventListener('click', () => {
+          // Only attempt to find an opponent when playing in
+          // two‑player mode.  In AI mode the button remains hidden.
+          if (!isPlayerVsAI) {
+            findOpponent();
           }
         });
       }
