@@ -104,6 +104,29 @@ header h1 {
   filter: brightness(0.9);
 }
 
+/* Opponent search container styles.  Initially hidden via the
+ * .hidden class.  When shown, it aligns with the other controls.
+ */
+.opponent-search {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Hide the opponent search container when the hidden class is present. */
+.opponent-search.hidden {
+  display: none;
+}
+
+.opponent-search input {
+  padding: 4px 8px;
+  font-size: 0.9rem;
+  border: 1px solid var(--tg-theme-button-color, #cccccc);
+  border-radius: 4px;
+  background-color: var(--tg-theme-secondary-bg-color, #f9f9f9);
+  color: var(--tg-theme-text-color, #222222);
+}
+
 main {
   flex: 1;
   display: flex;

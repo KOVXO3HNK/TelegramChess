@@ -825,6 +825,78 @@ let possibleMoves = []; // legal moves from selected square (array of verbose mo
 let isPlayerVsAI = true; // mode: true = vs AI, false = two players
 let aiDepth = 3; // AI difficulty (search depth)
 
+// Player rating scoreboard.  Each entry maps a player name to a rating
+// value.  Ratings persist across sessions via localStorage.  A new
+// player starts at 1500.  Opponent names are entered via the search
+// input in two‑player mode.  Scoreboard updates are made when a
+// two‑player game ends in checkmate.
+let scoreboard = {};
+let currentUserName = 'Player';
+let selectedOpponentName = null;
+let ratingUpdated = false;
+
+// Load scoreboard from localStorage.  If no scoreboard exists, start
+// with an empty object.  Use try/catch to handle JSON parse errors.
+function loadScoreboard() {
+  try {
+    const data = localStorage.getItem('tgChessScoreboard');
+    if (data) {
+      const parsed = JSON.parse(data);
+      if (typeof parsed === 'object' && parsed !== null) {
+        scoreboard = parsed;
+      }
+    }
+  } catch (e) {
+    // ignore and keep default empty scoreboard
+  }
+}
+
+// Save the current scoreboard to localStorage.  Ignore errors silently.
+function saveScoreboard() {
+  try {
+    localStorage.setItem('tgChessScoreboard', JSON.stringify(scoreboard));
+  } catch (e) {
+    // ignore
+  }
+}
+
+// Ensure a player exists in the scoreboard.  If not present, assign
+// the default starting rating of 1500.  Returns the player's rating.
+function ensurePlayer(name) {
+  if (!name) return 1500;
+  if (!scoreboard[name]) {
+    scoreboard[name] = 1500;
+  }
+  return scoreboard[name];
+}
+
+// Update the opponent datalist options based on the current scoreboard.
+// Exclude the current user from the list.  This function rebuilds the
+// datalist each time it is called.  It can be invoked whenever the
+// scoreboard or currentUserName changes.  Options display only the
+// player names; rating is shown later in the UI.
+function updateOpponentList() {
+  const datalist = document.getElementById('opponentList');
+  if (!datalist) return;
+  // Clear existing options
+  while (datalist.firstChild) {
+    datalist.removeChild(datalist.firstChild);
+  }
+  // Create an array of players excluding the current user, sorted by
+  // descending rating.  This allows users to pick opponents by their
+  // standing on the ladder.  The label of each option shows the
+  // player's rating alongside their name.
+  const players = Object.keys(scoreboard)
+    .filter(name => name !== currentUserName)
+    .sort((a, b) => (scoreboard[b] || 0) - (scoreboard[a] || 0));
+  players.forEach(name => {
+    const option = document.createElement('option');
+    option.value = name;
+    option.label = `${name} (${scoreboard[name]})`;
+    datalist.appendChild(option);
+  });
+}
+
 const statusEl = document.getElementById('status');
 // Indicate script has been parsed.  If you see this message in the
 // footer, the module loaded successfully.  This helps debug when the
@@ -856,23 +928,60 @@ window.onerror = function (message, source, lineno, colno, error) {
 function updateUsernames() {
   const playerSpan = document.getElementById('playerName');
   const opponentSpan = document.getElementById('opponentName');
+  // Determine the current user name from Telegram.  Remove the '@'
+  // prefix if present.  Fallback to first_name or 'Player' if
+  // unavailable.  Store the name in currentUserName and ensure it
+  // exists in the scoreboard.
   let name = 'Player';
   try {
     if (typeof Telegram !== 'undefined' && Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.user) {
       const user = Telegram.WebApp.initDataUnsafe.user;
       if (user.username) {
-        name = '@' + user.username;
+        // Do not include the '@' symbol in the display name
+        name = String(user.username);
       } else if (user.first_name) {
         name = user.first_name;
       }
     }
   } catch (e) {
-    // ignore errors and use default
+    // ignore errors and use default name
   }
-  if (playerSpan) playerSpan.textContent = name;
+  currentUserName = name || 'Player';
+  // Ensure the current user has a rating
+  ensurePlayer(currentUserName);
+  // Determine the opponent name.  In AI mode, display 'AI'.  In two
+  // player mode, use the selected opponent name if available; otherwise
+  // fall back to 'Player 2'.  When a human opponent is selected,
+  // ensure they have a rating.
+  let opponentName;
+  if (isPlayerVsAI) {
+    opponentName = 'AI';
+  } else {
+    opponentName = selectedOpponentName || 'Player 2';
+    if (opponentName && opponentName !== 'AI' && opponentName !== 'Player 2') {
+      ensurePlayer(opponentName);
+    }
+  }
+  // Update displayed names with ratings when applicable.  For AI mode,
+  // we omit ratings.  For human players, append the rating in
+  // parentheses.
+  if (playerSpan) {
+    if (isPlayerVsAI) {
+      playerSpan.textContent = currentUserName;
+    } else {
+      playerSpan.textContent = `${currentUserName} (${scoreboard[currentUserName]})`;
+    }
+  }
   if (opponentSpan) {
-    opponentSpan.textContent = isPlayerVsAI ? 'AI' : 'Player 2';
+    if (isPlayerVsAI) {
+      opponentSpan.textContent = opponentName;
+    } else {
+      opponentSpan.textContent = `${opponentName} (${scoreboard[opponentName]})`;
+    }
   }
+  // Save scoreboard and update opponent list
+  saveScoreboard();
+  updateOpponentList();
 }
 
 // Initialize Telegram WebApp environment and register theme handlers
@@ -1040,7 +1149,33 @@ function handleSquareClick(square) {
 // Update the status display with current turn or game result
 function updateStatus() {
   if (game.in_checkmate()) {
+    // Display which side won
     statusEl.textContent = game.turn() === 'w' ? 'Black wins by checkmate!' : 'White wins by checkmate!';
+    // If a two‑player game just ended and ratings have not yet been
+    // updated, adjust both players' ratings according to the result.
+    // Winner gains +5; loser loses -3 or -4 if losing to a lower‑rated
+    // opponent.  No rating change is applied for AI games or if
+    // already updated.
+    if (!isPlayerVsAI && !ratingUpdated) {
+      ratingUpdated = true;
+      const loserColor = game.turn();
+      const winnerColor = loserColor === 'w' ? 'b' : 'w';
+      // Determine winner and loser names based on which color is which
+      const winnerName = winnerColor === 'w' ? currentUserName : selectedOpponentName;
+      const loserName = loserColor === 'w' ? currentUserName : selectedOpponentName;
+      // Ensure both players exist in the scoreboard
+      const winnerRatingBefore = ensurePlayer(winnerName);
+      const loserRatingBefore = ensurePlayer(loserName);
+      // Apply rating update: winner +5
+      scoreboard[winnerName] = (scoreboard[winnerName] || 0) + 5;
+      // Loser penalty: -4 if loser had a higher rating than the winner
+      // before the update, else -3
+      const penalty = loserRatingBefore > winnerRatingBefore ? 4 : 3;
+      scoreboard[loserName] = Math.max(0, (scoreboard[loserName] || 0) - penalty);
+      // Persist and refresh UI
+      saveScoreboard();
+      updateUsernames();
+    }
   } else if (game.in_draw()) {
     statusEl.textContent = 'Draw!';
   } else {
@@ -1055,10 +1190,24 @@ function startNewGame() {
   possibleMoves = [];
   isPlayerVsAI = document.getElementById('modeSelect').value === 'ai';
   aiDepth = parseInt(document.getElementById('difficultySelect').value, 10) || 3;
+  // Reset rating update flag for this game.  This flag prevents
+  // multiple rating adjustments on repeated status updates after a
+  // checkmate.
+  ratingUpdated = false;
   // Enable/disable difficulty selector based on mode
   document.getElementById('difficultySelect').disabled = !isPlayerVsAI;
   document.getElementById('difficultyLabel').style.opacity = isPlayerVsAI ? 1 : 0.5;
-  // Update displayed usernames when starting a new game
+  // Show or hide the opponent search field based on mode
+  const searchContainer = document.getElementById('opponentSearchContainer');
+  if (searchContainer) {
+    if (isPlayerVsAI) {
+      searchContainer.classList.add('hidden');
+    } else {
+      searchContainer.classList.remove('hidden');
+    }
+  }
+  // Update displayed usernames when starting a new game.  This also
+  // initializes scoreboard entries if needed.
   updateUsernames();
   renderBoard();
   updateStatus();
@@ -1239,6 +1388,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (statusEl) {
         statusEl.textContent = 'Engine loaded';
       }
+      // Load persistent rating data and initialise the opponent list.
+      loadScoreboard();
+      updateOpponentList();
       // Bind UI controls after the Chess class is available
       document.getElementById('newGameBtn').addEventListener('click', startNewGame);
       document.getElementById('modeSelect').addEventListener('change', () => {
@@ -1248,6 +1400,31 @@ document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('difficultySelect').addEventListener('change', () => {
         aiDepth = parseInt(document.getElementById('difficultySelect').value, 10) || 3;
       });
+
+      // Bind opponent search input events.  When the user picks a
+      // value from the datalist (change event), assign the opponent
+      // name, ensure they have a rating, update the UI and start a
+      // new two‑player game.  Only apply this when in two‑player
+      // mode.
+      const opponentInput = document.getElementById('opponentSearchInput');
+      if (opponentInput) {
+        opponentInput.addEventListener('change', () => {
+          const value = opponentInput.value.trim();
+          if (value) {
+            selectedOpponentName = value;
+            if (selectedOpponentName !== 'AI' && selectedOpponentName !== 'Player 2') {
+              ensurePlayer(selectedOpponentName);
+            }
+            // Start a new game if currently in two‑player mode.  This
+            // will update names and ratings.
+            if (!isPlayerVsAI) {
+              startNewGame();
+            } else {
+              updateUsernames();
+            }
+          }
+        });
+      }
 
       // Toggle the visibility of the controls when the menu button is clicked
       const menuButton = document.getElementById('menuToggle');
