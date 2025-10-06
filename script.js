@@ -831,6 +831,14 @@ let aiDepth = 3; // AI difficulty (search depth)
 // input in two‑player mode.  Scoreboard updates are made when a
 // two‑player game ends in checkmate.
 let scoreboard = {};
+// Track whether the scoreboard has finished loading from CloudStorage.  It
+// starts as null (unknown).  When CloudStorage is unavailable the
+// loader will set it to true immediately.  When CloudStorage is
+// used, it is set to true once the asynchronous getItem callback
+// completes (regardless of success).  updateUsernames uses this
+// flag to decide whether to persist scores so that default ratings do
+// not overwrite values stored in the cloud.
+let scoreboardLoadedFromCloud = null;
 let currentUserName = 'Player';
 let selectedOpponentName = null;
 let ratingUpdated = false;
@@ -841,7 +849,26 @@ let matchQueue = [];
 
 // Load scoreboard from localStorage.  If no scoreboard exists, start
 // with an empty object.  Use try/catch to handle JSON parse errors.
+/*
+ * Load the player rating scoreboard.  The scoreboard is stored in
+ * localStorage for quick access but also synchronised with Telegram's
+ * CloudStorage (if available) to persist ratings across sessions and
+ * devices.  When running outside of Telegram or if CloudStorage is
+ * unavailable, only the localStorage copy is used.  On success,
+ * scoreboard is replaced with the parsed data.  If CloudStorage
+ * returns a result, the UI is refreshed by calling updateUsernames()
+ * so that newly loaded ratings are displayed immediately.
+ */
 function loadScoreboard() {
+  // Reset scoreboard to a fresh object before loading and mark cloud
+  // load as unknown.  This will be set to true when the cloud load
+  // completes (whether successful or not).
+  scoreboard = {};
+  scoreboardLoadedFromCloud = null;
+  // First attempt to load from localStorage.  Use try/catch to
+  // gracefully handle malformed JSON or other errors.  This allows
+  // development and fallback storage when CloudStorage is not
+  // available (for example when running in a standard browser).
   try {
     const data = localStorage.getItem('tgChessScoreboard');
     if (data) {
@@ -851,16 +878,108 @@ function loadScoreboard() {
       }
     }
   } catch (e) {
-    // ignore and keep default empty scoreboard
+    // Ignore errors and leave scoreboard as an empty object
+  }
+  // If running inside Telegram and the CloudStorage API is
+  // available, attempt to fetch the scoreboard from the cloud.
+  // CloudStorage stores data per user and per domain, so each
+  // player's ratings are persisted across sessions.  The callback
+  // receives a result object { ok: boolean, value: string }.  When
+  // complete (successfully or not), scoreboardLoadedFromCloud is set
+  // to true so that updateUsernames can persist new ratings.
+  try {
+    if (typeof Telegram !== 'undefined' && Telegram.WebApp && Telegram.WebApp.CloudStorage && typeof Telegram.WebApp.CloudStorage.getItem === 'function') {
+      Telegram.WebApp.CloudStorage.getItem('tgChessScoreboard', (result) => {
+        try {
+          if (result && result.ok && result.value) {
+            const cloudData = JSON.parse(result.value);
+            if (typeof cloudData === 'object' && cloudData !== null) {
+              scoreboard = cloudData;
+            }
+          }
+        } catch (e) {
+          // Ignore JSON parse errors and continue using the
+          // locally loaded scoreboard
+        } finally {
+          // Regardless of success, mark that the cloud load has
+          // completed and refresh the UI so that names and ratings
+          // reflect any updated values.
+          scoreboardLoadedFromCloud = true;
+          if (typeof updateUsernames === 'function') {
+            updateUsernames();
+          }
+        }
+      });
+    } else {
+      // CloudStorage not available; consider load complete immediately
+      scoreboardLoadedFromCloud = true;
+    }
+  } catch (e) {
+    // Any unexpected errors interacting with Telegram API are
+    // ignored.  Mark load complete to allow saving ratings.
+    scoreboardLoadedFromCloud = true;
   }
 }
 
 // Save the current scoreboard to localStorage.  Ignore errors silently.
+/*
+ * Save the current scoreboard to both localStorage and, if available,
+ * Telegram's CloudStorage.  LocalStorage is always written so that
+ * ratings persist when reloading the page outside of Telegram.
+ * When inside Telegram, CloudStorage allows ratings to be restored
+ * even after closing the mini‑app.  CloudStorage requires write
+ * access; we request it first and only attempt to write if
+ * permission is granted.  Errors are silently ignored to avoid
+ * interrupting the user experience.
+ */
 function saveScoreboard() {
+  // Always attempt to save to localStorage.  Even if CloudStorage
+  // fails, this provides a fallback within the same browser session.
   try {
     localStorage.setItem('tgChessScoreboard', JSON.stringify(scoreboard));
   } catch (e) {
-    // ignore
+    // Ignore localStorage write errors
+  }
+  // Attempt to save to Telegram CloudStorage if running inside
+  // Telegram and the API is available.  We must request write
+  // permission before writing; if the user denies or the API is
+  // unavailable the write silently fails and localStorage remains
+  // authoritative for this session.  The requestWriteAccess callback
+  // returns a boolean indicating whether access was granted.
+  try {
+    const tg = typeof Telegram !== 'undefined' && Telegram.WebApp ? Telegram.WebApp : null;
+    if (tg && tg.CloudStorage && typeof tg.CloudStorage.setItem === 'function') {
+      const data = JSON.stringify(scoreboard);
+      // Define a helper to perform the actual setItem call
+      const writeCloud = () => {
+        try {
+          tg.CloudStorage.setItem('tgChessScoreboard', data, (result) => {
+            // The callback receives { ok: boolean }.  We ignore
+            // failures silently to avoid disrupting the UI.
+          });
+        } catch (e) {
+          // Ignore CloudStorage write errors
+        }
+      };
+      // If requestWriteAccess is available, ask for permission
+      if (typeof tg.requestWriteAccess === 'function') {
+        try {
+          tg.requestWriteAccess((granted) => {
+            if (granted) {
+              writeCloud();
+            }
+          });
+        } catch (e) {
+          // If the request fails, fall back to writing directly
+          writeCloud();
+        }
+      } else {
+        // If requestWriteAccess is not available, attempt to write
+        writeCloud();
+      }
+    }
+  } catch (e) {
+    // Ignore any errors interacting with Telegram API
   }
 }
 
@@ -1078,8 +1197,14 @@ function updateUsernames() {
       opponentSpan.textContent = `${opponentName} (${scoreboard[opponentName]})`;
     }
   }
-  // Save scoreboard
-  saveScoreboard();
+  // Persist ratings only after the scoreboard has finished loading
+  // from CloudStorage.  This prevents overwriting a previously
+  // stored rating with the default value before the cloud data
+  // arrives.  Once scoreboardLoadedFromCloud is true (set in
+  // loadScoreboard), updates to the scoreboard will be saved.
+  if (scoreboardLoadedFromCloud) {
+    saveScoreboard();
+  }
 }
 
 // Initialize Telegram WebApp environment and register theme handlers
