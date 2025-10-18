@@ -849,7 +849,7 @@ let scoreboardLoadedFromCloud = null;
 // Leave this as an empty string to fall back to the local in‑browser
 // matchmaking queue (which only works within a single browser and
 // cannot match real Telegram users).
-const MATCHMAKER_URL = '';
+const MATCHMAKER_URL = 'https://telegramchess-server.onrender.com';
 let currentUserName = 'Player';
 let selectedOpponentName = null;
 let ratingUpdated = false;
