@@ -839,6 +839,17 @@ let scoreboard = {};
 // flag to decide whether to persist scores so that default ratings do
 // not overwrite values stored in the cloud.
 let scoreboardLoadedFromCloud = null;
+
+// --- Matchmaking server configuration ---
+// To enable cross‑user opponent search via a shared queue, set
+// MATCHMAKER_URL to the base URL of your matchmaking server (for
+// example, 'https://your-domain.com').  When non‑empty, the
+// findOpponent() function will POST to `${MATCHMAKER_URL}/match` and
+// poll `${MATCHMAKER_URL}/match/<userId>` until a match is found.
+// Leave this as an empty string to fall back to the local in‑browser
+// matchmaking queue (which only works within a single browser and
+// cannot match real Telegram users).
+const MATCHMAKER_URL = '';
 let currentUserName = 'Player';
 let selectedOpponentName = null;
 let ratingUpdated = false;
@@ -1055,13 +1066,75 @@ function findBestOpponent(name, rating) {
 // begins.  Otherwise the current user is added to the queue and a
 // message is shown indicating that the search is ongoing.
 function findOpponent() {
-  // Always ensure the scoreboard and queue are up to date
+  // Always ensure the current player has a rating entry
   ensurePlayer(currentUserName);
+  const myRating = scoreboard[currentUserName] || 1500;
+  // If a matchmaking server is configured, use it to find an opponent.
+  if (MATCHMAKER_URL) {
+    // Identify the current user.  Inside Telegram, we use the user id
+    // from initDataUnsafe; otherwise fall back to a pseudo‑random id
+    // derived from the current timestamp to allow basic testing in a
+    // regular browser.
+    let userId = null;
+    try {
+      if (typeof Telegram !== 'undefined' && Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.user && Telegram.WebApp.initDataUnsafe.user.id) {
+        userId = Telegram.WebApp.initDataUnsafe.user.id;
+      }
+    } catch (e) {
+      // ignore
+    }
+    if (!userId) {
+      userId = String(Date.now());
+    }
+    // Disable the New Game button while searching to prevent
+    // accidental restarts
+    const newGameBtn = document.getElementById('newGameBtn');
+    if (newGameBtn) newGameBtn.disabled = true;
+    // Show searching status
+    statusEl.textContent = 'Searching for opponent...';
+    // Post this player into the remote matchmaking queue
+    fetch(`${MATCHMAKER_URL.replace(/\/$/, '')}/match`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: userId, name: currentUserName, rating: myRating })
+    }).catch((err) => {
+      console.error('Error contacting matchmaking server:', err);
+      statusEl.textContent = 'Error contacting match server';
+      // Re‑enable the New Game button
+      if (newGameBtn) newGameBtn.disabled = false;
+    });
+    // Poll the server every 2 seconds to see if a match has been made
+    const pollInterval = setInterval(() => {
+      fetch(`${MATCHMAKER_URL.replace(/\/$/, '')}/match/${userId}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (data && data.matched) {
+            clearInterval(pollInterval);
+            // Remove the player from the search state and start the game
+            const opponent = data.opponent;
+            selectedOpponentName = opponent.name;
+            ensurePlayer(selectedOpponentName);
+            // Switch to two‑player mode and start the game
+            isPlayerVsAI = false;
+            startNewGame();
+            // Re‑enable the New Game button
+            if (newGameBtn) newGameBtn.disabled = false;
+            // Update status
+            statusEl.textContent = `Matched with ${selectedOpponentName} (${scoreboard[selectedOpponentName]})`;
+          }
+        })
+        .catch((err) => {
+          // network or parsing error; ignore and keep polling
+        });
+    }, 2000);
+    return;
+  }
+  // Fallback: use in‑browser matchmaking queue.  This only works
+  // within a single browser and cannot match players across devices.
   loadQueue();
   // Remove the current user from the queue (if present) before
   // searching so they don't match with themselves.
   removeFromQueue(currentUserName);
-  const myRating = scoreboard[currentUserName] || 1500;
   const candidate = findBestOpponent(currentUserName, myRating);
   if (candidate) {
     // Found a match.  Remove the opponent from the queue and save.
@@ -1083,8 +1156,8 @@ function findOpponent() {
     // Show searching status
     statusEl.textContent = 'Searching for opponent...';
     // Hide the new game button while waiting to avoid confusion
-    const newGameBtn = document.getElementById('newGameBtn');
-    if (newGameBtn) newGameBtn.disabled = true;
+    const newGameBtn2 = document.getElementById('newGameBtn');
+    if (newGameBtn2) newGameBtn2.disabled = true;
   }
 }
 
