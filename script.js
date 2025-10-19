@@ -1986,6 +1986,7 @@ function startNewGame() {
   const newGameBtn = document.getElementById('newGameBtn');
   if (findBtn) {
     if (currentMode === 'ratings') {
+      // Show find opponent only in ratings mode
       findBtn.classList.remove('hidden');
       findBtn.disabled = false;
     } else {
@@ -1993,9 +1994,17 @@ function startNewGame() {
       findBtn.disabled = true;
     }
   }
-  // Re‑enable the New Game button on every reset
+  // Show or hide the New Game button.  In ratings mode new games are
+  // created via matchmaking only, so hide the New Game button.  In other
+  // modes allow manual resetting.
   if (newGameBtn) {
-    newGameBtn.disabled = false;
+    if (currentMode === 'ratings') {
+      newGameBtn.classList.add('hidden');
+      newGameBtn.disabled = true;
+    } else {
+      newGameBtn.classList.remove('hidden');
+      newGameBtn.disabled = false;
+    }
   }
   // When switching away from a rated game, stop polling and clear
   // remote state variables
@@ -2207,7 +2216,7 @@ document.addEventListener('DOMContentLoaded', () => {
         aiDepth = parseInt(document.getElementById('difficultySelect').value, 10) || 3;
       });
 
-      // Bind the "Find Opponent" button.  When clicked in two‑player
+      // Bind the "Find Opponent" button.  When clicked in rated
       // mode, the current player is added to a matchmaking queue and
       // matched with another waiting player based on the smallest
       // rating difference.  In AI mode this button is hidden and
@@ -2221,6 +2230,18 @@ document.addEventListener('DOMContentLoaded', () => {
           if (currentMode === 'ratings') {
             findOpponent();
           }
+        });
+      }
+
+      // When the mode selection changes, immediately start a new game to
+      // apply visibility rules (difficulty/select, find opponent, new game
+      // button and timer) based on the chosen mode.  Without this,
+      // switching the selector would not hide/show controls until the
+      // user clicks New Game.
+      const modeSelectEl = document.getElementById('modeSelect');
+      if (modeSelectEl) {
+        modeSelectEl.addEventListener('change', () => {
+          startNewGame();
         });
       }
 

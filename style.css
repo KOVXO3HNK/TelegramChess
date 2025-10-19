@@ -136,6 +136,13 @@ header h1 {
   display: none;
 }
 
+/* Generic hidden utility class used to hide UI elements such as
+   buttons, selects and labels.  Without this, toggling the
+   'hidden' class from JavaScript has no effect. */
+.hidden {
+  display: none !important;
+}
+
 main {
   flex: 1;
   display: flex;
