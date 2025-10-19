@@ -1480,6 +1480,46 @@ function findOpponent() {
           // Switch to two‑player mode and initialise remote state
           isPlayerVsAI = false;
           initRemoteGame(payload.gameId, payload.color, payload.fen, payload.opponent);
+          // Synchronise ratings for both players from the server when a match is found.
+          // Update the local scoreboard with the opponent's rating immediately.
+          if (payload.opponent && typeof payload.opponent.rating === 'number') {
+            scoreboard[selectedOpponentName] = payload.opponent.rating;
+          }
+          // Fetch the current player's latest rating from the server to ensure
+          // both sides display the same value.  We use the Telegram user ID
+          // when available; otherwise fall back to the username.  After
+          // retrieving the rating, update the scoreboard and UI.
+          (function() {
+            let idVal = null;
+            try {
+              if (
+                typeof Telegram !== 'undefined' &&
+                Telegram.WebApp &&
+                Telegram.WebApp.initDataUnsafe &&
+                Telegram.WebApp.initDataUnsafe.user &&
+                Telegram.WebApp.initDataUnsafe.user.id
+              ) {
+                idVal = String(Telegram.WebApp.initDataUnsafe.user.id);
+              }
+            } catch (e) {
+              // ignore
+            }
+            if (!idVal) {
+              idVal = String(currentUserName);
+            }
+            if (MATCHMAKER_URL) {
+              fetch(`${MATCHMAKER_URL.replace(/\/$/, '')}/score/${idVal}`)
+                .then(resScore => resScore.json())
+                .then(scoreData => {
+                  if (scoreData && typeof scoreData.rating === 'number') {
+                    scoreboard[currentUserName] = scoreData.rating;
+                  }
+                  saveScoreboard();
+                  updateUsernames();
+                })
+                .catch(() => {});
+            }
+          })();
           // Re‑enable the New Game button
           if (newGameBtn) newGameBtn.disabled = false;
         };
