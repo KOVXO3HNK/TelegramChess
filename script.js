@@ -910,8 +910,46 @@ function initRemoteGame(gameId, color, fen, opponent) {
 function pollRemoteGameState() {
   if (!remoteActive || !remoteGameId) return;
   fetch(`${MATCHMAKER_URL}/game/${remoteGameId}`)
-    .then(res => res.json())
+    .then(res => {
+      if (res.status === 404) {
+        // Game not found (possibly deleted).  Treat as concluded.
+        if (remotePollId) clearInterval(remotePollId);
+        remotePollId = null;
+        remoteActive = false;
+        remoteGameId = null;
+        remoteMyColor = null;
+        // Refresh current user's rating from server
+        if (MATCHMAKER_URL) {
+          try {
+            let selfId = null;
+            if (
+              typeof Telegram !== 'undefined' &&
+              Telegram.WebApp &&
+              Telegram.WebApp.initDataUnsafe &&
+              Telegram.WebApp.initDataUnsafe.user &&
+              Telegram.WebApp.initDataUnsafe.user.id
+            ) {
+              selfId = String(Telegram.WebApp.initDataUnsafe.user.id);
+            } else {
+              selfId = String(currentUserName);
+            }
+            fetch(`${MATCHMAKER_URL.replace(/\/$/, '')}/score/${selfId}`)
+              .then(r => r.json())
+              .then(d => {
+                if (d && typeof d.rating === 'number') {
+                  scoreboard[currentUserName] = d.rating;
+                  saveScoreboard();
+                  updateUsernames();
+                }
+              });
+          } catch (e) {}
+        }
+        return null;
+      }
+      return res.json();
+    })
     .then(data => {
+      if (!data) return;
       if (!data || data.error) return;
       // Update ratings for both players from the server state
       if (data.players && data.players.w && data.players.b) {
@@ -1028,10 +1066,26 @@ function updateStatusRemote(state) {
   }
   if (over && result) {
     if (result.reason === 'checkmate') {
-      const winnerName = result.winnerId === ((Telegram && Telegram.WebApp && Telegram.WebApp.initDataUnsafe.user && Telegram.WebApp.initDataUnsafe.user.id) || currentUserName) ? currentUserName : remoteOpponent && remoteOpponent.name;
+      const winnerName =
+        result.winnerId ===
+        ((Telegram && Telegram.WebApp && Telegram.WebApp.initDataUnsafe.user && Telegram.WebApp.initDataUnsafe.user.id) || currentUserName)
+          ? currentUserName
+          : remoteOpponent && remoteOpponent.name;
       statusEl.textContent = `${winnerName} wins by checkmate!`;
     } else if (result.reason === 'stalemate') {
       statusEl.textContent = 'Draw by stalemate!';
+    } else if (result.reason === 'timeout') {
+      // Timeout: determine winner if provided, otherwise generic message
+      if (result.winnerId) {
+        const winnerName =
+          result.winnerId ===
+          ((Telegram && Telegram.WebApp && Telegram.WebApp.initDataUnsafe.user && Telegram.WebApp.initDataUnsafe.user.id) || currentUserName)
+            ? currentUserName
+            : remoteOpponent && remoteOpponent.name;
+        statusEl.textContent = `${winnerName} wins by timeout!`;
+      } else {
+        statusEl.textContent = 'Game ended by timeout';
+      }
     } else {
       statusEl.textContent = 'Game over';
     }
@@ -1458,6 +1512,52 @@ function updateUsernames() {
   currentUserName = name || 'Player';
   // Ensure the current user has a rating
   ensurePlayer(currentUserName);
+
+  // If a matchmaking server is configured, refresh the current user's
+  // rating from the server.  This ensures that ratings remain in sync
+  // across devices even if the user did not participate in the most
+  // recent game.  We do this asynchronously and update the UI when
+  // the fetch completes.  Note: opponent ratings are updated during
+  // remote games via pollRemoteGameState().
+  if (MATCHMAKER_URL) {
+    try {
+      let selfId = null;
+      if (
+        typeof Telegram !== 'undefined' &&
+        Telegram.WebApp &&
+        Telegram.WebApp.initDataUnsafe &&
+        Telegram.WebApp.initDataUnsafe.user &&
+        Telegram.WebApp.initDataUnsafe.user.id
+      ) {
+        selfId = String(Telegram.WebApp.initDataUnsafe.user.id);
+      } else {
+        selfId = String(currentUserName);
+      }
+      // Fetch rating for the current user from the server
+      fetch(`${MATCHMAKER_URL.replace(/\/$/, '')}/score/${selfId}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data && typeof data.rating === 'number') {
+            // Update scoreboard with the server‑provided rating and save
+            scoreboard[currentUserName] = data.rating;
+            saveScoreboard();
+            // Re‑render names with updated rating
+            if (playerSpan) {
+              if (isPlayerVsAI) {
+                playerSpan.textContent = currentUserName;
+              } else {
+                playerSpan.textContent = `${currentUserName} (${scoreboard[currentUserName]})`;
+              }
+            }
+          }
+        })
+        .catch(() => {
+          // ignore network errors
+        });
+    } catch (err) {
+      // ignore errors
+    }
+  }
   // Determine the opponent name.  In AI mode, display 'AI'.  In two
   // player mode, use the selected opponent name if available; otherwise
   // fall back to 'Player 2'.  When a human opponent is selected,
