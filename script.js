@@ -1030,11 +1030,9 @@ function pollRemoteGameState() {
         // Hide timer display
         const timerElEnd = document.getElementById('timerDisplay');
         if (timerElEnd) timerElEnd.classList.add('hidden');
-        // Hide player names after a rated match ends
-        hideRatingsNames = true;
         // Persist updated ratings (server already updated them) to CloudStorage/localStorage
         saveScoreboard();
-        // Ensure UI reflects new ratings
+        // Ensure UI reflects new ratings (names remain visible in rated mode)
         updateUsernames();
       }
     })
@@ -1109,7 +1107,6 @@ function sendRemoteMove(from, to, promotion) {
         }
         const timerEl = document.getElementById('timerDisplay');
         if (timerEl) timerEl.classList.add('hidden');
-        hideRatingsNames = true;
         saveScoreboard();
         updateUsernames();
       }
@@ -1639,9 +1636,12 @@ window.onerror = function (message, source, lineno, colno, error) {
 function updateUsernames() {
   const playerSpan = document.getElementById('playerName');
   const opponentSpan = document.getElementById('opponentName');
-  // If names should be hidden (e.g. after a rated game ends), clear
-  // their display and return early.
-  if (hideRatingsNames) {
+  // In local two‑player mode we hide both player names and ratings so
+  // the board stands on its own without any labels.  In rated and AI
+  // modes the names remain visible throughout the game and after it
+  // ends.  We rely on currentMode to determine whether to hide
+  // labels; hideRatingsNames is no longer used for this purpose.
+  if (currentMode === 'two') {
     if (playerSpan) playerSpan.textContent = '';
     if (opponentSpan) opponentSpan.textContent = '';
     return;
