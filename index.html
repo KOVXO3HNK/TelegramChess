@@ -33,6 +33,7 @@
           <select id="modeSelect">
             <option value="ai">Play vs AI</option>
             <option value="two">Two Players</option>
+            <option value="ratings">Ratings</option>
           </select>
           <label for="difficultySelect" id="difficultyLabel">Difficulty:</label>
           <select id="difficultySelect">
@@ -52,6 +53,10 @@
       </header>
       <main>
         <div id="board" class="board"></div>
+        <!-- Timer for rated games; hidden by default.  This element displays
+             the time remaining until a forfeit in Ratings mode.  It is
+             shown only during active remote games. -->
+        <div id="timerDisplay" class="timer hidden"></div>
       </main>
       <footer id="status"></footer>
     </div>

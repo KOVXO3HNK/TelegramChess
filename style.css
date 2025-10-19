@@ -123,6 +123,19 @@ header h1 {
   display: none;
 }
 
+/* Timer display for rated games.  It is hidden by default and
+   appears centered above the board when a rated game is active. */
+.timer {
+  font-size: 1rem;
+  font-weight: 600;
+  text-align: center;
+  margin: 4px 0;
+}
+
+.timer.hidden {
+  display: none;
+}
+
 main {
   flex: 1;
   display: flex;

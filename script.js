@@ -841,6 +841,26 @@ let scoreboard = {};
 let scoreboardLoadedFromCloud = null;
 
 // ---------------------------------------------------------------------------
+// Mode and timer management
+//
+// currentMode tracks the selected play mode: 'ai' for playing vs the
+// computer, 'two' for local two‑player play and 'ratings' for rated
+// remote matches.  This is set in startNewGame() based on the mode
+// selector.  MOVE_TIMEOUT_MS_CLIENT defines the time (in
+// milliseconds) a player has to make a move before losing on
+// timeout in rated games.  remoteLastMove stores the timestamp of
+// the last move received from the server (used to compute the
+// countdown in rated games).  remoteTimerInterval holds the ID of
+// the setInterval used to update the countdown.  hideRatingsNames is
+// used to hide player names after a rated game ends so that only
+// results are displayed.
+let currentMode = 'ai';
+const MOVE_TIMEOUT_MS_CLIENT = 5 * 60 * 1000;
+let remoteLastMove = null;
+let remoteTimerInterval = null;
+let hideRatingsNames = false;
+
+// ---------------------------------------------------------------------------
 // Remote multiplayer support
 //
 // The following variables and functions implement a rudimentary
@@ -899,6 +919,19 @@ function initRemoteGame(gameId, color, fen, opponent) {
   remotePollId = setInterval(() => {
     pollRemoteGameState();
   }, 2000);
+
+  // Initialise timer for rated mode: set last move timestamp to now
+  // and start the countdown interval
+  if (currentMode === 'ratings') {
+    remoteLastMove = Date.now();
+    updateTimerDisplay();
+    if (remoteTimerInterval) {
+      clearInterval(remoteTimerInterval);
+    }
+    remoteTimerInterval = setInterval(() => {
+      updateTimerDisplay();
+    }, 1000);
+  }
 }
 
 /**
@@ -969,6 +1002,19 @@ function pollRemoteGameState() {
       // Update status (whose turn, or end result)
       remoteMyColor = remoteMyColor; // no change
       updateStatusRemote(data);
+      // Update timer information.  If the server provides a
+      // lastMove timestamp, use it; otherwise leave the existing
+      // value.  Start the countdown interval if it isn't already
+      // running.
+      if (typeof data.lastMove === 'number') {
+        remoteLastMove = data.lastMove;
+      }
+      updateTimerDisplay();
+      if (!remoteTimerInterval && currentMode === 'ratings' && remoteActive) {
+        remoteTimerInterval = setInterval(() => {
+          updateTimerDisplay();
+        }, 1000);
+      }
       // If game is over, stop polling
       if (data.over) {
         if (remotePollId) clearInterval(remotePollId);
@@ -976,6 +1022,16 @@ function pollRemoteGameState() {
         remoteActive = false;
         remoteGameId = null;
         remoteMyColor = null;
+        // Stop countdown timer
+        if (remoteTimerInterval) {
+          clearInterval(remoteTimerInterval);
+          remoteTimerInterval = null;
+        }
+        // Hide timer display
+        const timerElEnd = document.getElementById('timerDisplay');
+        if (timerElEnd) timerElEnd.classList.add('hidden');
+        // Hide player names after a rated match ends
+        hideRatingsNames = true;
         // Persist updated ratings (server already updated them) to CloudStorage/localStorage
         saveScoreboard();
         // Ensure UI reflects new ratings
@@ -1027,6 +1083,18 @@ function sendRemoteMove(from, to, promotion) {
         renderBoard();
       }
       updateStatusRemote(data);
+      // Update last move timestamp and restart timer for rated games
+      if (typeof data.lastMove === 'number') {
+        remoteLastMove = data.lastMove;
+      } else {
+        remoteLastMove = Date.now();
+      }
+      updateTimerDisplay();
+      if (!remoteTimerInterval && currentMode === 'ratings' && remoteActive) {
+        remoteTimerInterval = setInterval(() => {
+          updateTimerDisplay();
+        }, 1000);
+      }
       // If game ended, stop polling and mark remoteInactive; ratings already updated
       if (data.over) {
         if (remotePollId) clearInterval(remotePollId);
@@ -1034,6 +1102,14 @@ function sendRemoteMove(from, to, promotion) {
         remoteActive = false;
         remoteGameId = null;
         remoteMyColor = null;
+        // Stop timer and hide names
+        if (remoteTimerInterval) {
+          clearInterval(remoteTimerInterval);
+          remoteTimerInterval = null;
+        }
+        const timerEl = document.getElementById('timerDisplay');
+        if (timerEl) timerEl.classList.add('hidden');
+        hideRatingsNames = true;
         saveScoreboard();
         updateUsernames();
       }
@@ -1097,6 +1173,38 @@ function updateStatusRemote(state) {
       statusEl.textContent = `${remoteOpponent && remoteOpponent.name || 'Opponent'} to move`;
     }
   }
+}
+
+/**
+ * Update the countdown timer display for rated games.  This reads
+ * remoteLastMove and computes the remaining time until the timeout
+ * defined by MOVE_TIMEOUT_MS_CLIENT.  When not in a rated game or
+ * when no timer is active the timer element is hidden.  When the
+ * countdown expires the display shows 0:00 but otherwise does not
+ * trigger game logic (the server will handle timeouts).  This
+ * function is called periodically during remote games and when a
+ * remote move is sent or received.
+ */
+function updateTimerDisplay() {
+  const timerEl = document.getElementById('timerDisplay');
+  if (!timerEl) return;
+  // Show timer only in rated games when a remote game is active
+  if (currentMode !== 'ratings' || !remoteActive || !remoteLastMove) {
+    timerEl.classList.add('hidden');
+    return;
+  }
+  const now = Date.now();
+  const remaining = MOVE_TIMEOUT_MS_CLIENT - (now - remoteLastMove);
+  if (remaining <= 0) {
+    timerEl.textContent = '0:00';
+    timerEl.classList.remove('hidden');
+    return;
+  }
+  const minutes = Math.floor(remaining / 60000);
+  const seconds = Math.floor((remaining % 60000) / 1000);
+  const secStr = seconds < 10 ? '0' + seconds : '' + seconds;
+  timerEl.textContent = `${minutes}:${secStr}`;
+  timerEl.classList.remove('hidden');
 }
 
 // --- Matchmaking server configuration ---
@@ -1491,6 +1599,13 @@ window.onerror = function (message, source, lineno, colno, error) {
 function updateUsernames() {
   const playerSpan = document.getElementById('playerName');
   const opponentSpan = document.getElementById('opponentName');
+  // If names should be hidden (e.g. after a rated game ends), clear
+  // their display and return early.
+  if (hideRatingsNames) {
+    if (playerSpan) playerSpan.textContent = '';
+    if (opponentSpan) opponentSpan.textContent = '';
+    return;
+  }
   // Determine the current user name from Telegram.  Remove the '@'
   // prefix if present.  Fallback to first_name or 'Player' if
   // unavailable.  Store the name in currentUserName and ensure it
@@ -1789,7 +1904,12 @@ function updateStatus() {
     // opponent.  No rating change is applied for AI games or if
     // already updated.
     // Only update local ratings for non‑AI games when not playing a remote game.
-    if (!isPlayerVsAI && !remoteActive && !ratingUpdated) {
+    // Update ratings only for rated remote games.  Skip in local two
+    // players mode (currentMode === 'two') and AI games.  remoteActive
+    // is true during rated games so this condition should never
+    // trigger for them.  We also guard with ratingUpdated to avoid
+    // multiple adjustments.
+    if (!isPlayerVsAI && !remoteActive && currentMode !== 'two' && !ratingUpdated) {
       ratingUpdated = true;
       const loserColor = game.turn();
       const winnerColor = loserColor === 'w' ? 'b' : 'w';
@@ -1821,40 +1941,84 @@ function startNewGame() {
   game = new Chess();
   selectedSquare = null;
   possibleMoves = [];
-  isPlayerVsAI = document.getElementById('modeSelect').value === 'ai';
+  // Determine the current mode from the selector.  Modes are:
+  // 'ai' (play vs AI), 'two' (local two‑player) and 'ratings'
+  const modeVal = document.getElementById('modeSelect').value;
+  currentMode = modeVal || 'ai';
+  isPlayerVsAI = currentMode === 'ai';
   aiDepth = parseInt(document.getElementById('difficultySelect').value, 10) || 3;
-  // Reset rating update flag for this game.  This flag prevents
+  // Reset the rating update flag for this game.  This flag prevents
   // multiple rating adjustments on repeated status updates after a
   // checkmate.
   ratingUpdated = false;
-  // Enable/disable difficulty selector based on mode
-  document.getElementById('difficultySelect').disabled = !isPlayerVsAI;
-  document.getElementById('difficultyLabel').style.opacity = isPlayerVsAI ? 1 : 0.5;
-  // Show or hide the "Find Opponent" button based on mode.  In AI mode
-  // the button remains hidden and disabled; in two‑player mode it is
-  // visible and enabled.  Also ensure the "New Game" button is
-  // re‑enabled when starting a new game.
+  // Reset remote and timer state when starting a new game
+  hideRatingsNames = false;
+  if (remoteTimerInterval) {
+    clearInterval(remoteTimerInterval);
+    remoteTimerInterval = null;
+  }
+  remoteLastMove = null;
+  const timerEl = document.getElementById('timerDisplay');
+  if (timerEl) timerEl.classList.add('hidden');
+  // Enable or disable the difficulty selector and toggle its
+  // visibility.  In AI mode difficulty is shown; in two‑player and
+  // ratings modes it is hidden.  We adjust opacity to show disabled
+  // state for clarity.
+  const diffSelect = document.getElementById('difficultySelect');
+  const diffLabel = document.getElementById('difficultyLabel');
+  if (diffSelect && diffLabel) {
+    if (currentMode === 'ai') {
+      diffSelect.disabled = false;
+      diffSelect.classList.remove('hidden');
+      diffLabel.classList.remove('hidden');
+      diffLabel.style.opacity = 1;
+    } else {
+      diffSelect.disabled = true;
+      diffSelect.classList.add('hidden');
+      diffLabel.classList.add('hidden');
+      diffLabel.style.opacity = 0.5;
+    }
+  }
+  // Control the visibility of the Find Opponent button based on
+  // mode.  It is only visible in the 'ratings' mode.  In local
+  // two‑player or AI modes it is hidden and disabled.
   const findBtn = document.getElementById('findOpponentBtn');
   const newGameBtn = document.getElementById('newGameBtn');
   if (findBtn) {
-    if (isPlayerVsAI) {
-      findBtn.classList.add('hidden');
-      findBtn.disabled = true;
-    } else {
+    if (currentMode === 'ratings') {
       findBtn.classList.remove('hidden');
       findBtn.disabled = false;
+    } else {
+      findBtn.classList.add('hidden');
+      findBtn.disabled = true;
     }
   }
+  // Re‑enable the New Game button on every reset
   if (newGameBtn) {
     newGameBtn.disabled = false;
   }
+  // When switching away from a rated game, stop polling and clear
+  // remote state variables
+  if (remotePollId) {
+    clearInterval(remotePollId);
+    remotePollId = null;
+  }
+  remoteActive = false;
+  remoteGameId = null;
+  remoteMyColor = null;
+  remoteOpponent = null;
   // Update displayed usernames when starting a new game.  This also
   // initializes scoreboard entries if needed.
   updateUsernames();
   renderBoard();
-  updateStatus();
-  // If AI plays first (black) in two‑player mode, no AI on first move
-  // In our implementation, the human always plays white vs AI
+  // For remote rated games, clear status and start with timer hidden
+  if (currentMode === 'ratings') {
+    statusEl.textContent = 'Waiting to match...';
+  } else {
+    updateStatus();
+  }
+  // In this implementation the human always plays white vs AI; for
+  // local two‑player games we do not change who goes first.
 }
 
 // Kick off an AI move using a minimax search.  After computing the
@@ -2052,9 +2216,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const findOpponentBtn = document.getElementById('findOpponentBtn');
       if (findOpponentBtn) {
         findOpponentBtn.addEventListener('click', () => {
-          // Only attempt to find an opponent when playing in
-          // two‑player mode.  In AI mode the button remains hidden.
-          if (!isPlayerVsAI) {
+          // Only attempt to find an opponent in rated mode.  In
+          // other modes this button is hidden or disabled.
+          if (currentMode === 'ratings') {
             findOpponent();
           }
         });
