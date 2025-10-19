@@ -840,6 +840,211 @@ let scoreboard = {};
 // not overwrite values stored in the cloud.
 let scoreboardLoadedFromCloud = null;
 
+// ---------------------------------------------------------------------------
+// Remote multiplayer support
+//
+// The following variables and functions implement a rudimentary
+// networked chess game atop the matchmaking server.  When a match is
+// found via the /match endpoint the client records the gameId and
+// colour assigned by the server.  Moves are sent to the server via
+// POST /game/<id>/move and board state is periodically polled via
+// GET /game/<id>.  Ratings are maintained on the server and
+// reflected in the UI.  If no match is found, the mini‑app falls back
+// to local two‑player or AI play as before.
+
+// ID of the current remote game (if any).  null when no remote game
+// is active.
+let remoteGameId = null;
+// Colour assigned by the server to the current user ('w' or 'b')
+let remoteMyColor = null;
+// Interval ID used for polling the server for game state.  Cleared when
+// the game ends.
+let remotePollId = null;
+// Remote opponent information received from the server: { id, name, rating }
+let remoteOpponent = null;
+// Flag indicating whether a remote game is currently active.  When true
+// the local engine defers to the server for move validation and board
+// state.
+let remoteActive = false;
+
+/**
+ * Initialise a remote game.  Called once the matchmaking server has
+ * paired this player with an opponent.  Loads the initial FEN into
+ * the engine, sets the colour and starts polling the server for state
+ * updates.
+ *
+ * @param {string} gameId The identifier for the remote game
+ * @param {string} color  The colour assigned to the current player ('w' or 'b')
+ * @param {string} fen    Initial FEN string for the board
+ * @param {object} opponent Opponent info { id, name, rating }
+ */
+function initRemoteGame(gameId, color, fen, opponent) {
+  remoteGameId = gameId;
+  remoteMyColor = color;
+  remoteOpponent = opponent;
+  remoteActive = true;
+  // Stop any existing polling loop
+  if (remotePollId) clearInterval(remotePollId);
+  // Ensure the Chess engine is ready and load the FEN
+  game = new Chess();
+  game.load(fen);
+  selectedSquare = null;
+  possibleMoves = [];
+  ratingUpdated = false;
+  // Display opponent name and ratings
+  updateUsernames();
+  renderBoard();
+  updateStatusRemote();
+  // Start polling the server for state updates every 2 seconds
+  remotePollId = setInterval(() => {
+    pollRemoteGameState();
+  }, 2000);
+}
+
+/**
+ * Poll the server for the current state of the active remote game.  If
+ * the position has changed since the last update, reload the engine
+ * and re‑render the board.  If the game has ended, stop polling and
+ * update ratings accordingly.
+ */
+function pollRemoteGameState() {
+  if (!remoteActive || !remoteGameId) return;
+  fetch(`${MATCHMAKER_URL}/game/${remoteGameId}`)
+    .then(res => res.json())
+    .then(data => {
+      if (!data || data.error) return;
+      // Update ratings for both players from the server state
+      if (data.players && data.players.w && data.players.b) {
+        // Ensure scoreboard entries exist and update values
+        const pW = data.players.w;
+        const pB = data.players.b;
+        scoreboard[pW.name] = pW.rating;
+        scoreboard[pB.name] = pB.rating;
+      }
+      // If FEN differs from our current board, load it and rerender
+      if (data.fen && data.fen !== game.fen()) {
+        game.load(data.fen);
+        selectedSquare = null;
+        possibleMoves = [];
+        renderBoard();
+      }
+      // Update status (whose turn, or end result)
+      remoteMyColor = remoteMyColor; // no change
+      updateStatusRemote(data);
+      // If game is over, stop polling
+      if (data.over) {
+        if (remotePollId) clearInterval(remotePollId);
+        remotePollId = null;
+        remoteActive = false;
+        remoteGameId = null;
+        remoteMyColor = null;
+        // Persist updated ratings (server already updated them) to CloudStorage/localStorage
+        saveScoreboard();
+        // Ensure UI reflects new ratings
+        updateUsernames();
+      }
+    })
+    .catch(err => {
+      // network error; ignore
+    });
+}
+
+/**
+ * Send a move to the server.  If the server accepts the move it
+ * returns the updated game state which is then loaded into the engine.
+ * Illegal moves or server errors will simply do nothing.
+ *
+ * @param {string} from Source square (e.g. 'e2')
+ * @param {string} to   Destination square (e.g. 'e4')
+ * @param {string} promotion Optional promotion piece ('q', 'r', 'b', 'n')
+ */
+function sendRemoteMove(from, to, promotion) {
+  if (!remoteActive || !remoteGameId) return;
+  const playerId = (Telegram && Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.user && Telegram.WebApp.initDataUnsafe.user.id) || currentUserName;
+  const payload = { playerId: String(playerId), from: from.toLowerCase(), to: to.toLowerCase() };
+  if (promotion) payload.promotion = promotion.toLowerCase();
+  fetch(`${MATCHMAKER_URL}/game/${remoteGameId}/move`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+    .then(res => res.json())
+    .then(data => {
+      if (!data || data.error) {
+        // illegal move or error; nothing to do
+        return;
+      }
+      // Update ratings from server state
+      if (data.players && data.players.w && data.players.b) {
+        const pW = data.players.w;
+        const pB = data.players.b;
+        scoreboard[pW.name] = pW.rating;
+        scoreboard[pB.name] = pB.rating;
+      }
+      // Load new FEN if provided
+      if (data.fen) {
+        game.load(data.fen);
+        selectedSquare = null;
+        possibleMoves = [];
+        renderBoard();
+      }
+      updateStatusRemote(data);
+      // If game ended, stop polling and mark remoteInactive; ratings already updated
+      if (data.over) {
+        if (remotePollId) clearInterval(remotePollId);
+        remotePollId = null;
+        remoteActive = false;
+        remoteGameId = null;
+        remoteMyColor = null;
+        saveScoreboard();
+        updateUsernames();
+      }
+    })
+    .catch(err => {
+      // ignore errors
+    });
+}
+
+/**
+ * Update the status text during a remote game.  Displays whose turn it
+ * is or the result of the game.  Accepts an optional state object
+ * returned by the server; if omitted, it infers state from the
+ * current board.
+ *
+ * @param {object} [state] Latest server state
+ */
+function updateStatusRemote(state) {
+  if (!statusEl) return;
+  let turnColor;
+  let over = false;
+  let result = null;
+  if (state) {
+    turnColor = state.turn;
+    over = state.over;
+    result = state.result;
+  } else {
+    turnColor = game.turn();
+    over = game.game_over();
+  }
+  if (over && result) {
+    if (result.reason === 'checkmate') {
+      const winnerName = result.winnerId === ((Telegram && Telegram.WebApp && Telegram.WebApp.initDataUnsafe.user && Telegram.WebApp.initDataUnsafe.user.id) || currentUserName) ? currentUserName : remoteOpponent && remoteOpponent.name;
+      statusEl.textContent = `${winnerName} wins by checkmate!`;
+    } else if (result.reason === 'stalemate') {
+      statusEl.textContent = 'Draw by stalemate!';
+    } else {
+      statusEl.textContent = 'Game over';
+    }
+  } else {
+    // Ongoing game: indicate whose turn it is
+    if (turnColor === remoteMyColor) {
+      statusEl.textContent = 'Your move';
+    } else {
+      statusEl.textContent = `${remoteOpponent && remoteOpponent.name || 'Opponent'} to move`;
+    }
+  }
+}
+
 // --- Matchmaking server configuration ---
 // To enable cross‑user opponent search via a shared queue, set
 // MATCHMAKER_URL to the base URL of your matchmaking server (for
@@ -849,6 +1054,11 @@ let scoreboardLoadedFromCloud = null;
 // Leave this as an empty string to fall back to the local in‑browser
 // matchmaking queue (which only works within a single browser and
 // cannot match real Telegram users).
+// Base URL of the matchmaking server.  When set to a non‑empty string
+// the mini‑app will communicate with the back‑end to pair players and
+// synchronise game state.  If you deploy the server on Render or
+// another host, update this value accordingly.  Leave empty to use
+// only local/offline play.
 const MATCHMAKER_URL = 'https://telegramchess-server.onrender.com';
 let currentUserName = 'Player';
 let selectedOpponentName = null;
@@ -1069,15 +1279,19 @@ function findOpponent() {
   // Always ensure the current player has a rating entry
   ensurePlayer(currentUserName);
   const myRating = scoreboard[currentUserName] || 1500;
-  // If a matchmaking server is configured, use it to find an opponent.
+  // If a matchmaking server is configured, use it to find an opponent via the
+  // server API.  The server immediately responds when a match is
+  // available; otherwise the client polls /match/:id until paired.
   if (MATCHMAKER_URL) {
-    // Identify the current user.  Inside Telegram, we use the user id
-    // from initDataUnsafe; otherwise fall back to a pseudo‑random id
-    // derived from the current timestamp to allow basic testing in a
-    // regular browser.
     let userId = null;
     try {
-      if (typeof Telegram !== 'undefined' && Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.user && Telegram.WebApp.initDataUnsafe.user.id) {
+      if (
+        typeof Telegram !== 'undefined' &&
+        Telegram.WebApp &&
+        Telegram.WebApp.initDataUnsafe &&
+        Telegram.WebApp.initDataUnsafe.user &&
+        Telegram.WebApp.initDataUnsafe.user.id
+      ) {
         userId = Telegram.WebApp.initDataUnsafe.user.id;
       }
     } catch (e) {
@@ -1086,47 +1300,51 @@ function findOpponent() {
     if (!userId) {
       userId = String(Date.now());
     }
-    // Disable the New Game button while searching to prevent
-    // accidental restarts
     const newGameBtn = document.getElementById('newGameBtn');
     if (newGameBtn) newGameBtn.disabled = true;
-    // Show searching status
     statusEl.textContent = 'Searching for opponent...';
-    // Post this player into the remote matchmaking queue
+    // Send join request to the server
     fetch(`${MATCHMAKER_URL.replace(/\/$/, '')}/match`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: userId, name: currentUserName, rating: myRating })
-    }).catch((err) => {
-      console.error('Error contacting matchmaking server:', err);
-      statusEl.textContent = 'Error contacting match server';
-      // Re‑enable the New Game button
-      if (newGameBtn) newGameBtn.disabled = false;
-    });
-    // Poll the server every 2 seconds to see if a match has been made
-    const pollInterval = setInterval(() => {
-      fetch(`${MATCHMAKER_URL.replace(/\/$/, '')}/match/${userId}`)
-        .then((res) => res.json())
-        .then((data) => {
-          if (data && data.matched) {
-            clearInterval(pollInterval);
-            // Remove the player from the search state and start the game
-            const opponent = data.opponent;
-            selectedOpponentName = opponent.name;
-            ensurePlayer(selectedOpponentName);
-            // Switch to two‑player mode and start the game
-            isPlayerVsAI = false;
-            startNewGame();
-            // Re‑enable the New Game button
-            if (newGameBtn) newGameBtn.disabled = false;
-            // Update status
-            statusEl.textContent = `Matched with ${selectedOpponentName} (${scoreboard[selectedOpponentName]})`;
-          }
-        })
-        .catch((err) => {
-          // network or parsing error; ignore and keep polling
-        });
-    }, 2000);
+      body: JSON.stringify({ id: userId, name: currentUserName, rating: myRating }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        const handleMatch = (payload) => {
+          // Received a match: initialise remote game and update UI
+          selectedOpponentName = payload.opponent.name;
+          ensurePlayer(selectedOpponentName);
+          // Switch to two‑player mode and initialise remote state
+          isPlayerVsAI = false;
+          initRemoteGame(payload.gameId, payload.color, payload.fen, payload.opponent);
+          // Re‑enable the New Game button
+          if (newGameBtn) newGameBtn.disabled = false;
+        };
+        if (data && data.matched) {
+          handleMatch(data);
+        } else {
+          // No match yet: poll the server periodically
+          const poll = setInterval(() => {
+            fetch(`${MATCHMAKER_URL.replace(/\/$/, '')}/match/${userId}`)
+              .then((res2) => res2.json())
+              .then((data2) => {
+                if (data2 && data2.matched) {
+                  clearInterval(poll);
+                  handleMatch(data2);
+                }
+              })
+              .catch(() => {
+                // ignore errors and keep polling
+              });
+          }, 2000);
+        }
+      })
+      .catch((err) => {
+        console.error('Error contacting matchmaking server:', err);
+        statusEl.textContent = 'Error contacting match server';
+        if (newGameBtn) newGameBtn.disabled = false;
+      });
     return;
   }
   // Fallback: use in‑browser matchmaking queue.  This only works
@@ -1399,41 +1617,59 @@ function highlightSquares(sqArray, cls) {
 // highlighting its legal moves, and executing moves.  After a player
 // move, the AI will respond if in AI mode.
 function handleSquareClick(square) {
+  // If the local engine reports game over, ignore clicks
   if (game.game_over()) {
     return;
   }
-  const turn = game.turn();
   const piece = game.get(square);
-  // If no piece is selected, try to select a piece belonging to the player
+  // If a remote game is active, send moves to the server instead of
+  // applying them locally.  Only allow selecting and moving pieces
+  // belonging to the current player colour.  Board updates will be
+  // applied when the server returns the new FEN.
+  if (remoteActive) {
+    const myTurn = game.turn() === remoteMyColor;
+    if (!myTurn) {
+      // Not your turn: ignore input
+      return;
+    }
+    if (!selectedSquare) {
+      // Select a piece of the current player's colour
+      if (piece && ((remoteMyColor === 'w' && piece.color === 'w') || (remoteMyColor === 'b' && piece.color === 'b'))) {
+        selectedSquare = square;
+        possibleMoves = game.moves({ square: square, verbose: true });
+      }
+    } else {
+      // Attempt to send the move to the server
+      sendRemoteMove(selectedSquare, square);
+      selectedSquare = null;
+      possibleMoves = [];
+    }
+    renderBoard();
+    return;
+  }
+  // Local or AI game logic
+  const turn = game.turn();
   if (!selectedSquare) {
     if (piece && ((turn === 'w' && piece.color === 'w') || (!isPlayerVsAI && turn === 'b' && piece.color === 'b'))) {
       selectedSquare = square;
       possibleMoves = game.moves({ square: square, verbose: true });
     }
   } else {
-    // Attempt to move the selected piece to the clicked square
-    // Attempt the move.  Do not always specify a promotion piece; the
-    // game engine will handle promotion when a pawn reaches the last
-    // rank and include the appropriate promotion in the move object.
     const move = game.move({ from: selectedSquare, to: square });
     if (move) {
-      // Successful move
       selectedSquare = null;
       possibleMoves = [];
       renderBoard();
       updateStatus();
-      // If playing vs AI and game continues, schedule AI move
       if (isPlayerVsAI && !game.game_over()) {
         setTimeout(() => makeAIMove(), 200);
       }
       return;
     } else {
-      // If clicked a different friendly piece, switch selection
       if (piece && ((turn === 'w' && piece.color === 'w') || (!isPlayerVsAI && turn === 'b' && piece.color === 'b'))) {
         selectedSquare = square;
         possibleMoves = game.moves({ square: square, verbose: true });
       } else {
-        // Otherwise clear selection
         selectedSquare = null;
         possibleMoves = [];
       }
@@ -1452,7 +1688,8 @@ function updateStatus() {
     // Winner gains +5; loser loses -3 or -4 if losing to a lower‑rated
     // opponent.  No rating change is applied for AI games or if
     // already updated.
-    if (!isPlayerVsAI && !ratingUpdated) {
+    // Only update local ratings for non‑AI games when not playing a remote game.
+    if (!isPlayerVsAI && !remoteActive && !ratingUpdated) {
       ratingUpdated = true;
       const loserColor = game.turn();
       const winnerColor = loserColor === 'w' ? 'b' : 'w';
