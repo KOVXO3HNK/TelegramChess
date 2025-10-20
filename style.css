@@ -198,6 +198,13 @@ main {
 
 .piece {
   pointer-events: none;
+  /* Specify a list of symbol fonts to improve rendering of chess
+     pieces across different devices (especially iOS).  Without a
+     specific font family the default system font can render black
+     pieces incorrectly or crop them.  Also set line-height to 1 to
+     prevent glyphs from being clipped vertically. */
+  font-family: 'Segoe UI Symbol', 'Symbola', 'Noto Sans Symbols2', 'Apple Color Emoji', sans-serif;
+  line-height: 1;
 }
 
 /* Differentiated colours for chess pieces.  Without specifying

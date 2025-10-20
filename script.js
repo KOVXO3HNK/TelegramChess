@@ -1139,22 +1139,73 @@ function updateStatusRemote(state) {
   }
   if (over && result) {
     if (result.reason === 'checkmate') {
-      const winnerName =
-        result.winnerId ===
-        ((Telegram && Telegram.WebApp && Telegram.WebApp.initDataUnsafe.user && Telegram.WebApp.initDataUnsafe.user.id) || currentUserName)
-          ? currentUserName
-          : remoteOpponent && remoteOpponent.name;
+      // Determine the correct winner name based on the winnerId.  We
+      // compare the server‑provided winnerId against the current
+      // user's Telegram id (when available) and the remote opponent's
+      // id.  This avoids incorrectly falling back to the display name
+      // when the Telegram id is unavailable (e.g. on some iOS
+      // configurations), which previously caused the loser to be
+      // shown as the winner.  If neither id matches, we assume the
+      // opponent won as a final fallback.
+      let myId = null;
+      try {
+        if (
+          typeof Telegram !== 'undefined' &&
+          Telegram.WebApp &&
+          Telegram.WebApp.initDataUnsafe &&
+          Telegram.WebApp.initDataUnsafe.user &&
+          Telegram.WebApp.initDataUnsafe.user.id
+        ) {
+          myId = String(Telegram.WebApp.initDataUnsafe.user.id);
+        }
+      } catch (e) {
+        myId = null;
+      }
+      let winnerName;
+      if (result.winnerId) {
+        const winnerIdStr = String(result.winnerId);
+        if (myId && winnerIdStr === myId) {
+          winnerName = currentUserName;
+        } else if (remoteOpponent && String(remoteOpponent.id) === winnerIdStr) {
+          winnerName = remoteOpponent.name;
+        } else {
+          // If we cannot match the id, default to remoteOpponent for clarity
+          winnerName = (remoteOpponent && remoteOpponent.name) || currentUserName;
+        }
+      } else {
+        // No winner id provided; default to opponent
+        winnerName = (remoteOpponent && remoteOpponent.name) || currentUserName;
+      }
       statusEl.textContent = `${winnerName} wins by checkmate!`;
     } else if (result.reason === 'stalemate') {
       statusEl.textContent = 'Draw by stalemate!';
     } else if (result.reason === 'timeout') {
       // Timeout: determine winner if provided, otherwise generic message
       if (result.winnerId) {
-        const winnerName =
-          result.winnerId ===
-          ((Telegram && Telegram.WebApp && Telegram.WebApp.initDataUnsafe.user && Telegram.WebApp.initDataUnsafe.user.id) || currentUserName)
-            ? currentUserName
-            : remoteOpponent && remoteOpponent.name;
+        // Map winnerId to a display name (see checkmate case for logic)
+        let myId = null;
+        try {
+          if (
+            typeof Telegram !== 'undefined' &&
+            Telegram.WebApp &&
+            Telegram.WebApp.initDataUnsafe &&
+            Telegram.WebApp.initDataUnsafe.user &&
+            Telegram.WebApp.initDataUnsafe.user.id
+          ) {
+            myId = String(Telegram.WebApp.initDataUnsafe.user.id);
+          }
+        } catch (e) {
+          myId = null;
+        }
+        let winnerName;
+        const winnerIdStr = String(result.winnerId);
+        if (myId && winnerIdStr === myId) {
+          winnerName = currentUserName;
+        } else if (remoteOpponent && String(remoteOpponent.id) === winnerIdStr) {
+          winnerName = remoteOpponent.name;
+        } else {
+          winnerName = (remoteOpponent && remoteOpponent.name) || currentUserName;
+        }
         statusEl.textContent = `${winnerName} wins by timeout!`;
       } else {
         statusEl.textContent = 'Game ended by timeout';
